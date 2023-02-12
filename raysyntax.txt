@@ -1,0 +1,353 @@
+RAYSYNTAX.TXT:
+
+MUSINGS:
+
+What about dominant switches eg ',X' in c() that forces both ,C and ,T.
+
+Use ,vv to cancel ,v (etc).  Easy to type, intuitive and conserves namespace.  BUT 'vv' could mean: MORE v.
+
+syntax vs usage/help ... this needs thinking. Syntax should be brief.
+
+Switches: can also be 'dominant' like ,B in 'l()' -- no matter what else is set, B kills all color and messages.  Whole string of switches is read, unlike firstish switches, but not lastish either.
+
+switches also classify as to
+Listing: what items are found.  This is 'passive' stuff.
+Output: like 'width' in 'l()', what info is shown.
+Display: color or not, messages or not, or 'bare': strip everything off.
+System: only ,H:
+
+Are arguments always 'Listing:' ?
+
+What about doubled switches? ,p = plain but ,pp = bare?
+
+--------------------------------------------------------------------------------
+THE PROBLEM:
+
+One of the things I don't like about Linux CLI commands is that there don't seem to be very many rules governing their syntax. It seems that coders make up the syntax for their commands any way the spirit moves them at the time.  Given that there are so many arguments and options and switches associated with most commands, and given that there is no consistent syntax, I find it very difficult to remember the rules for most of them.
+
+It dosen't help that often the letters used for various switches are anything but intuitive, eg. 'grep' uses '-a' to indicate "search binary files".  And different commands use different switches for exactly the same purpose, eg. some use '-h' for 'help', some use '--help', some use '-help, and some use several of those.  'ls' uses '-R' for 'recursive' and '-r' for 'reverse' but 'grep' uses both of those for 'recursive'.  Some commands want source directories before target directories but others have it reversed.  And so it goes.
+
+Thus, I find myself having to consult 'man' for some commands almost every time I want to use one of them.  But the sad truth is that many man pages are poorly written and often huge.  Practical examples are often lacking.  Sometimes I want to use a command to do just some simple, basic little thing but I can't remember the syntax or correct switches and end up spending half an hour reading a man page wading through hundreds of lines of arcane details that are of no imediate interest whatsoever until I finally find what I want.
+
+--------------------------------------------------------------------------------
+MY SOLUTION:
+
+Create a protocol for making shell wrapper functions around any command(s) you choose.  (Note, everything here presumes use of zsh, but of course the same concepts would apply for any shell.)  Wrappers will in effect redesign the syntax of commands to work the way you want them to work, the goals being consistency and, as far as possible, intuitiveness.  For example, perhaps the switch 'r' should always mean 'recursive', switches should always come before arguments, source directories should always come before targets, and so on.
+
+Wrappers are pointedly *not* expected to handle all the functionality of the underlying command(s).  As we add functionality we loose simplicity.  Quite the contrary, they should be designed to handle something like 90% or so of your normal every day use of the underlying command -- but make that 90% very simple.  Also, the built-in help screens for wrappers will deal with just the options available in the wrapper instead of showing you everything there is to know about the underlying command, again keeping things fast and simple.
+
+Because they aren't expected to 'do it all', wrappers are not designed to hide or replace 'real' commands.  Far from it, as we will see below, the ',H' switch will store the 'real' command to history for recall and re-execution with modification as required.  Thus, wrappers can be used as a quick and easy way of creating the skeleton of a complex command:
+
+	$ g ,H "some string"
+
+...  expands to, and and executes this 'real' command:
+
+	$ grep -d skip -TIHn --color=auto "some string" *
+
+...  which can be recalled from history and modified in any way for re-execution.
+
+Similarly:
+
+	$ l ,H
+
+...  expands to and executes:
+
+	$ ls --time-style=+%F-%T -AGFrgt --group-directories-first --color=always  | egrep '' | egrep -v "^total"
+
+(BTW, all my wrappers are optimized for an xterm environment, thus color is used extensively.)
+
+Besides recalling the 'real' command, rather than adding esoteric switches and options to a wrapper, sometimes it might be simpler to just modify the code of the wrapper for some unusual situation.  As we'll see below, this has been made very easy.
+
+--------------------------------------------------------------------------------
+GRAMMAR 101:
+
+A computer command is basically a sentence and like all sentences it consists of a subject and a predicate.  Predicates consist of 'verb(s)' and their modifiers -- instructions to do something to something.  Subjects consist of 'noun(s) and their modifiers -- the something that is being acted upon.  The command itself is always part of the predicate and the arguments following usually are the subject.  Note that there must be a subject tho that is not always obvious. " $ halt ": the subject is the computer itself.  But usually we can offer the command a range of subjects: " ls *.txt ": list all text files, and sometimes there is a default: " ls ": list all files in the current directory.
+
+The generic computer command looks like this: " COMMAND SWITCHES ARGUMENTS ".  Whereas COMMAND is always a verb and part of the predicate, the ARGUMENTS are usually part of the subject -- things like files to be listed or disks to be mirrored or a CPU to have its temperature taken, etc.  The SWITCHES can modify either the verbs or the nouns and thus can be part of either the predicate or the subject, and the ARGUMENTS, too, are sometimes part of the predicate: " apt-get install zsh ": 'apt-get install' is the predicate here.  Sometimes the subject is compound: " grep "some string" *.txt ": 'some string' and '*.txt' are both part of the subject -- the string to find and the list of targets to find it in.  AFAICT the predicate never has this complication.
+
+--------------------------------------------------------------------------------
+OVERVIEW OF THE SYNTAX:
+
+The eternal problem is to come up with a syntax that is simple, consistent, intuitive and yet powerful enough to handle most situations.  Note that we must resist the temptation to 'over design' the syntax to handle exceptionally complex cases because it is probably better to just use the underlying 'real' command directly.  Remember, the goal is a simple way of handling normal situations.
+
+Philosophically, do we forbid as much as we can, or permit as much as we can?  Although our instinct is always to 'freedom', freedom tends to create variability, which in turn creates uncertainty and confusion which is our enemy.  We should actually restrict things as much as we can *without* impeeding functionallity.  The question to ask of a restriction is: what functionallity that I want is impeeded by this restriction?  Or, conversely: what functionality would I gain by some new freedom?  This attitude will create consistency, which is our goal.
+
+After much experimenting I think I've found a syntax that is simple and usable.  Note that I describe this syntax in almost absurd detail, but I want the rules to be absolutely clear -- simplicity on the CLI, legalistic over-kill here!  You are really strange if this sort of thing interests you ;-) Nevertheless it is facinating how much needs to be said if we really want to nail this stuff down.
+
+Note that some of the rules below are not so much 'enforced' as they are the simple unavoidable consequences of some other rule or just flow from the natural logic of programing that is as simple as possible.  Also, note that at the end of the day it is often easier to 'just see' how the rules work in practice than it is to describe them in perfect detail, so I won't go too far overboard with this.  A few examples can be worth hundreds of lines of explanation.
+
+(Speaking of programing, it should also be a goal to keep wrapper code reasonably readable so that mere mortals can understand and modify them.  My own zsh coding skills are as yet very limited, and it shows.)
+
+
+--------------------------------------------------------------------------------
+THE RULES:
+
+RULE: The individual syntactic elements of a command 'tail' will consist of some number of strings (i.e. contiguous characters) separated from each other by whitespace.  This rule is already universal and understood by every person who uses a command line in any operating system.
+
+RULE: If it is necessary that either whitespace or some special character be included in a string, that string must be enclosed in either single or double quotes in keeping with the standard rules of linux/unix shells, eg:
+
+	$ g "This sentence is just one string and just one argument." "This is the second argument."
+
+This rule is also already universal.  (The abomination of permitting whitespace within filenames will not be mentioned again.  Suffice it to say that spaces within any 'identifier', 'word' or 'token' are to be avoided if at all possible.)
+
+RULE: The elements in the command 'tail' (all switches and arguments) will be in this order:
+
+Command, dash switches, comma switches, dot switches, active args, compound args, name/value args, simple args, plural args, smart args trailing args.  Explanation to follow.
+
+RATIONALE:  Switches come first, as is already conventional.
+
+--------------------------------------------------------------------------------
+SWITCHES:
+
+Most commands have switches, otherwise known as 'options', associated with them.  These turn some feature on or off, or sometimes select from a few different choices.  In Linux there actually are (surprise!) some rules about what switches look like.  They always begin with a dash.  They can look like this: " -a -b -c -d " or this: " -abcd " or this: " --color=auto ".  But we also see this: " -mmin +2 " where a space is permitted inside one argument.
+
+RULE: Switches are preceded by either a dash, a comma, or a dot and must be of the form " command -abcd ,xyz .efg [arguments] ".  That is, switches (if any) must occur as one string (one continuous string of characters) for each group of 'dash', 'dot' or 'comma' switches.  In other words things like: " command ,a ,b ,c.d " are illegal.  Note that these rules are made purely to simplify the script's parsing code, however they 'cost' nothing since there is never anything to be gained by not obeying them.  (In the above example what possible objection could there be to typing " command ,abc " vs.  " command ,a ,b ,c " ?)
+
+RULE: Whereas some commands must have at least one argument (tho sometimes there is a default so it looks like there is no argument), no switch is ever mandatory, thus, whatever 'issue' the switch refers to must have a default value such that the use of the switch will change from the default (or just 'restate' it).  Thus " l * " (which wraps 'ls') lists all files sorted by modification date (the default), but " l ,n " lists alphabetically.
+
+What is an 'issue'? 'l' (ls) has these switches among others:
+
+,f	Filenames only.
+,d	Directories only.
+,e	Executable files only.
+
+,m	by Modificaton time.
+,a	by Access time.
+,s	by file Size.
+,n	by Name (alphabetical).
+
+... 'fde' all refer to the same 'issue', that is, only one of them can be active at any time (we can't list filenames only and directories only at the same time, can we?)  In the same way 'masn' have the same issue: the order of the sort of the list of files.  There is usually more than one issue for most commands.  This will have implications below.
+
+Switches can be classified thus:
+
+-'global' vs. 'local': It's nice to have as many switches as possible act exactly the same way in every wrapper, these are 'global'.
+
+-'internal', 'passive' or 'active': 'internal' just means that the switch will ask the command to print a help screen or something like that.  Some commands are intrinsically passive themselves, eg. 'ls' which displays information, but does not 'do anything' to the computer; such commands can't have active switches, obviously.  Contrast 'rm' which most definately does something.  However, even for such active commands, some switches are passive -- they don't change what the command does but only what (say) it displays.  The common ',v' switch (verbose output) is a good example of a passive switch.  " rap ,i [package name] " is a good example of an active switch: install [package name].  Of course some commands contain both active and passive fuctionality.
+
+-'subject' or 'predicate': Some switches modify what a command does, and some modify the list of targets on which it acts. " rap ,i PACKAGE ": ',i' is part of the predicate of the command.  " apt-file search ~i PACKAGE ": '~i' is part of the subject, it limits the targets to those packages that have been installed.  Grammatically we could call it an adjective.
+
+- 'binary' or 'multiple choice': Some switches are simply 'on or off' regarding their issue, with the default usually being 'off'; others offer multiple choices eg: 'f' (find) offers: ,f ,d, e, ,l ... find files, directories, execuables, or links -- only one choice can be enabled (see below).
+
+- 'simple' or 'compound': A simple switch has meaning 'by itself' whereas a compound switch must be supplied with a matched argument for it to have meaning, eg. " s ,r main.c 5 " (restore backup #5 of main.c): the '5' argument is meaningful with the ',r' switch but not needed otherwise, so this is a 'compound' switch (along with its matching compound argument 'main.c' ).
+
+An 'adjustable' switch has a second character after it that modifies the switch itself, eg. " l ,v3 *.txt ": use the third level of verbosity.  This can be tricky to code since the following character must not have an independent meaning.
+
+-'firstish' or 'lastish': Firstish switches execute imediately and ignore whatever else might be on the command line.  (The logician will note that firstish switches are necessarily simple, but obvioulsy not all simple switches are firstish. Also, internal switches are always firstish.)
+
+Lastish switches have the property of 'contradiction' which means that if several switches that refer to the same issue (i.e.  that 'contradict' each other) are used, then the last one 'wins'.  For example 'f' is the wrapper around 'find'.  'f' can be told to search, (among others) for either ',d' (directories only), ',e' (executable files only) or ',l' (symbolic links).  So, looking at: " f ,deffld somedir " ...  the switches contradict each other, and ',d', being last, 'wins the issue', i.e.  we will be looking for directories named 'somedir'.  This lastish property is already very common in linux commands, I've just given it a name (if it doesn't have one already).
+
+RULE: Where a sequence of lastish switches contradict each other, the last one 'wins'.
+
+RATIONALE: This might seem messy or undisplined, however it is much easier to live with than to cure:  The parser, after reading a lastish switch, can't just 'stop'--it must keep going (looking for further switches, and/or arguments).  And so, as further switches are parsed, if they contradict, the parser doesn't complain, it simply doesn't care that you can't make up your mind and the last switch 'wins the issue'.
+
+RULE: Except for the fact that 'the last lastish switch wins' as just explained, the order of switches will have no effect on the command output.  Eg:
+
+	$ rap lws package1 package2
+	$ rap swl package2 package1
+
+...  none of the switches contradict, so the above two commands will show exactly the same package information for each package argument following the switches.  (i.e.  package order is relevant, switch order isn't).
+
+RATIONALE: This rule is not 'enforced' in the code, it simply follows from the simplest parsing method.  We could build in code to prevent this, but it would be a needless complication.  Switches are parsed before the command does anything.  Once the switches have been parsed, setting various options (as explained above), it makes no difference in what order they were set.  (However the package name arguments are gone through sequentially, so their order does matter.)
+
+RULE: If an illegal switch character occurs, it will trigger an error message followed by the syntax help screen.  (Unless the illegal character follows any firstish switch since, as explained above, in that case the 'good' switch will execute immediately and the illegal character will never even be parsed.)
+
+RULE: There probably should be no such thing as a firstish active switch.  Any instruction to a command that is firstish and active should be a full word, eg. " rap upgrade ".
+
+RULE: 'Dash switches' will be 'global', 'simple', 'internal' and 'firstish'.  The following dash switches will have these meanings:
+
+-s = show just the syntax help.
+-h = show the entire help text.
+-e = edit the *working* (not 'final') version of the source file, and re-source it for local use.
+
+RULE: 'Comma switches' are lastish.
+
+NOTE: Capitalizing a switch seems most effective for 'reverse' (as opposed to upside down) or as 'greater', eg. 'rap ,n' vs.  'rap ,N': search by name of installed packages, or of all available packages.  Or 'reverse' as in opposite.
+
+'Dot switches' are local.  They are used when the intuitive or obvious letter for some function is already taken as a comma switch, so adding dot switches makes that letter available again. TODO: IS THIS BEST? Or should we use dot switches as active? See 'r ()'.
+
+# 2021-02-21: Smart switch:
+See rap(): ,i switch is now smart: either install or flag 'installed only'.
+This conserves namespace.  Too smartass?
+
+--------------------------------------------------------------------------------
+ARGUMENTS:
+
+RULE: Following the switches, if any, come some number of arguments which must be strings, eg:
+
+	$ g ,C "This is one string" "This is another string"
+	$ rap .h ,lw package-one package-two
+
+Active arguments come first, eg: " apt-get install PACKAGE ", since they can be thought of as logically the same as an active switch.  Then compount arguments, since they are paired with a switch and thus are naturally put close to them.  Name/value arguments are always modifiers to the output, never 'objects', and it is intuitive to have all objects (files, packages, directories, etc.) at the end of the command string -- so name/value args come next, then simple arguments, then plural arguments will run to the end of the tail unless followed by a smart argument, which must be last anyway for reasons of parsing simplicity (except for any 'trailing' args, which are passed to the 'real' command directly and are always last).
+
+###
+ and the " * " filespec will be used by default even if not typed.  However sometimes the 'default' is nothing, eg: " rap ,b PACKAGE ": show brief description of package, " rap ,d PACKAGE ": show full description of package, " rap PACKAGE ": show no description at all of PACKAGE.
+
+Almost every wrapper has at least one argument, however very often there is a default, so " l " is idential to " l * ".  However, sometimes no default is possible: " rap ,sl PACKAGE " ...  show information, and list the files installed by PACKAGE ...  there must be a PACKAGE but there is no sensible default (*what* package?).
+
+RULE: No active command has a default argument when an argument is possible (note that a command like 'halt' is active, but there is no argument possible, thus the issue of a default does not arise.)
+
+RULE: If there are no arguments following a command, the normal thing will be to show the help screen, however commands that are entirely passive, and that are obviously able to do something useful even when no arguments are used, may do so, eg. " l " (ls) will list the current directory.  So far, 'l' and 'c' are the only wrappers with this property.
+
+RULE: Normally all arguments will be case INsensitive unless the ',c' switch is used.
+
+RULE: Wildcards should not need to be escaped (like this: " file.\* ") if that is at all possible.  This is a difficult thing to do in linux but sometimes it can be done.
+
+RULE: All arguments will have a defined order.
+
+Arguments may be classified thus:
+
+- 'object' or 'active':  Most arguments refer to the 'object' that the command will act on, eg. files to be copied, strings to be searched for in some group of files, or packages to be installed.  However some arguments are 'active' which is to say that they execute some operation eg: " rap upgrade ".
+
+## CAN ACTIVE ARGS BE MIXED WITH OBJECT ARGS? IF SO THEY COME FIRST TO CONFORM TO NORMAL VERB - NOUN GRAMMAR.  THIS MAKES THEM RATHER LIKE SWITCHES.
+
+## RULE: active arguments should be capitalized, simply to warn the user that they are 'dangerous'.  They always come first, and they are firstish.
+
+- 'name/value':  In " r, mins+2 * ", 'mins+2' is an example of a name/value argument.  In this case the name is 'mins' and the value is '+2', (i.e.  find files older than two minutes).
+
+## NO! IF ORDER IS DEFINED THEN SIMPLE 'if' TESTS CAN STEP THROUGH THE ARGS RATHER THAN HAVING A 'while' LOOP CHECK AND RECHECK FOR EACH 'NAME'.  THERE IS NOTHING TO BE GAINED BY HAVING ORDER UNDEFINED.
+
+They are usually optional however some are mandatory: " r days+3 f* " (There is no point in searching for recent files matching 'f*' unless you specify how recent, is there?)
+
+- 'simple': " "a string" " and " *.txt " are simple arguments.
+
+RULE: Simple arguments are always mandatory.
+
+- 'compound': As mentioned above, some switches demand an argument specifically for themselves, eg. " s ,r main.c 5 ": the '5' argument is meaningful only with the ',r' switch and not needed otherwise, this is a 'compound' argument.
+
+RULE: When a compound argument is needed it should be the first argument after any name/value arguments if possible.  It is like a simple argument in all other respects.
+
+- 'plural':  It is very common for commands to accept several arguments of the same type or issue, eg. in: " $ cp a* b* c* Somedir ": 'a* b* c*' (all input filespecs of course) is a plural argument (for logical convinience we'll refer to it as single argument).  There must always be at least one component tho it might be a default, and a plural argument must be either the last argument, or followed by a 'smart' argument (see below).  There can only be one plural argument.
+
+However we can have two plural arguments by using a separator. In 'g()' we can have any number of strings, then a ':' then any number of filespecs eg: " g is now time the : speeches.txt sayings.* "  Note that the filespec 'speeches.txt' might be another string to search for so no amount of smartness can save us from needing the separator.  In the case of: " g 'now is' time the : ", the default filespec of '*' is used, but again the separator is needed.
+
+- 'tail': A tail argument passes directly to the 'real' command unchanged.  These are always last.
+
+RATIONALE: It is obvious why both the number and the order of simple and compound arguments must be defined.  If we had a command with three possible simple arguments, " command arg-one arg-two arg-three ", and we tried to permit both 'arg-two' and 'arg-three' to have a default (or to be optional), if that command were to be entered with just two arguments, how would the parser decide if the second argument was a value for 'arg-two', with 'arg-three' using a default, or if the second argument was a value for 'arg-three', with 'arg-two' using a default?
+
+Or consider this example: " cp ~/Myfiles /backups ".  It is hardly possible that the 'source' and 'target' arguments could be inverted.  Because these simple arguments have no 'name' the parser must rely on the order of the arguments to know what each of them means.  In other words, where arguments are mandatory (eg. a file to copy), by enforcing an order on them, we loose the need to name them.  Thus only optional arguments need a name since the parser can use that name to know 'which is which' and it follows that named arguments can optional, get it?
+
+EXCEPTION: It is permissible for the last and ONLY the last (for the reasons mentioned above) of the simple arguments to have a default.  (Typically this will be a target directory, and the default will be the current directory.)  Note that in such situations the parser can easily tell that an argument is in fact a file or directory and this information makes it possible for the parser to treat such an argument as though it were a named argument and thus parse it in any order even though it is a simple argument.  This is a 'smart' argument.
+
+Note that in rare situations, like 'f', in which more than one directory to search can be specified, the source directory(s) consist of plural, arguments:
+
+  f ,e *zsh* /aWorking $path
+
+...  this finds all executable files named '*zsh*'in the directory '/aWorking' or anywhere on the command path.  Thus smart arguments can also be plural.  As usual, the default search path is '.' i.e.  the current directory.
+
+We could enforce a rule that smart arguments (like other simple arguments) should always precede named arguments, but the natural mechanism of the parser does not require that.  For now let us just say that a smart argument is a simple argument that can be treated in all respects like a named argument.
+
+Here is an example:
+
+	copy /f* Temp/r /root/files/*.txt
+    copy /f* Temp/r /root/files/*.txt /directory
+
+In the first line, the plural argument (input files) is parsed to the end of the command line, and, no directory being encountered as an argument, the target directory defaults to '.' (the current directory).  In the second line, the plural argument terminates with the smart argument '/directory' which parses as a directory and so becomes the target directory.  Smart, but not hard to understand.
+
+RULE: Where possible, 'source' arguments will always precede 'target' arguments.  Other rules of the same sort should be looked for.  Note that 's' (create or restore a backup file) gives an exception:  " s main.c 5 " copies 'main.c' to 'main.c.5', fine, but: " s ,R main.c 5 " copies (restores) 'main.c.5' to 'main.c'.  Thus the syntax always requires the 'main.c' argument, but the '5' is only needed in that one situation where a backup file is being restored, not saved, so the rule of 'mandatory arguments first' trumps the 'source before target' rule.  Also, '5' is not even a full filename, just a backup number, so it's 'weight' is poor.
+
+--------------------------------------------------------------------------------
+SYNTAX HELP
+
+The '-s' switch brings up a terse help screen.
+
+--------------------------------------------------------------------------------
+ SAMPLE (taken from 'r'):
+
+-(sher): Syntax or full Help, Edit function, view 'raysyntax.txt'
+
+r ,H{CAN}{fdel}bcmvrD <days,mins><+,-><INTEGER> <FILESPEC> [PATH[S]] ...
+
+,CAN:  Follow symbolic links: Always, Never, Command line only.
+,fdel: Type of 'file' is: regular File, Directory, Executable file,
+       symbolic Link.
+
+,b:  Bare: display files only, with full path.
+,c:  Enable Case sensitive search.
+,m:  Search all Mounted filesystems.
+,v:  Verbose: show files with 'ls -l' style information.
+,r:  Recursive.
+,D:  Delete matched files.
+
+FILESPEC: The filespec to search for, wildcards ok.
+PATH[S]:  The directory(s) to search.  Default is current directory.
+          (Note that any PATH[S] comes *after* the FILESPEC!)
+
+<days,mins><+,-><INTEGER>
+    Filter files by age, either older or younger than
+    INTEGER number of either days or minutes.
+
+--------------------------------------------------------------------------------
+USAGE HELP
+
+Besides 'SYNTAX' help there will also be a more in-depth 'full help' screen called with the '-h' switch, giving usage and examples:
+
+--------------------------------------------------------------------------------
+SAMPLE (taken from 'r'):
+
+'r' is a wrapper around 'find' specifically for finding new and
+changed files.  You can search for new directories and new links
+as well, but not all at the same time.  It is always recursive
+but searching for mounted volumes (under the target directory)
+is optional.
+
+If there is nothing following 'r' Syntax help will be shown.
+
+EXAMPLES:
+
+\e[31;1m  r c* /etc mins-5 \e[0m
+...  Search for files less than five minutes old matching
+'c*' in the '/etc' directory.
+
+\e[31;1m  r ,AEcmv c* days+2 \e[0m
+...  Show all new files matching 'c*' over two days old.
+Follow (A)ll symbolic links, show (E)xecutable files only.
+Search (c)ase insensitively including all (m)ounted volumes under '/etc'
+and display the results (v)erbosely.
+
+\e[31;1m  r ,d * days-1 \e[0m
+...  Find all new (d)irectories as of today.
+
+\e[31;1m r -s \e[0m
+...  Show the syntax helper."
+
+--------------------------------------------------------------------------------
+COMMENTS ON HELP SCREENS (and see 'help-on-help.txt' too)
+
+NOTE, SOMETIMES ARGS ARE MANDATORY, SOMETIMES NOT, SO DON'T  WRITE THEM ONE WAY OR THE OTHER.
+
+RULE: The line for the dash switches is always the same and always comes first, followed by the line(s) for the comma and dot switches.
+
+" r -shpe ,H  ":  (The " ,H " switch is ys available, so to save space it's on the same line.)
+
+As many 'example' lines as needed should be used to show each 'form' of the command rather than writing gramatical mostrosities on one line (see 'rap').  The goal of the help text is to clarify, so rules are secondary to clarity.  Only explain what needs to be explained.  However these rules seem useful:
+
+RULE: Mandatory arguments are enclosed in " <> ".
+
+RULE: Optional arguments are enclosed in " [] ".  (But since switches themselves are *always* optional they are not bracketed.)  Note that each example line 'presumes it's own context'.  This is difficult to explain but an example should suffice:
+
+g ,r <[\"]STRING[\"]> [*PATH*] ...  [SWITCHES]
+g ,r <[\"]STRING[\"]> [*PATH*] ...  --include=FILESPEC [SWITCHES]
+
+...  We don't bracket " --include=FILESPEC  " because showing an example of that argument's usage is the purpose of that example.  In other words, in that example, the argument is 'mandatory' becuase it is the raison d'etre of that example.
+
+RULE: 'Compound' switches along with their associated argument, use parenthesis: " () ".
+
+" rap ,d[i](g[C]) (STRING) <*PACKAGE[S]*> ".  If the ',g' switch is used, it requires the coresponding argument '(STRING)'
+
+RULE: When there is more than one option for any given 'issue' (as commonly happens with lastish switches) they are enclosed in " {} ".  Thus " f ,{ANC}{defl}cmv " means: "the last instance of either 'A', 'N' or 'C' will be active, and the last instance of either 'd', 'e', 'f' or 'l' will be active, and none or any or all of 'c', 'm' and 'v' will be active."  With switches, there's no need for a separator since they are always single letters, but with arguments, a comma will separate multiple options.
+
+RULE: In " [<days,mins><+,-><INTEGER>] " 'days','mins', '+' and '-' are literal strings whereas 'INTEGER' means 'some integer'.  Thus, capitalized words are descriptive whereas all others are litteral.  Thus, the above (from the 'f' command) would read: "It is optional to modify the command with a 'time' argument, but if you do, either 'days' or 'mins' must be followed by either '+' or '-' which must be followed by an integer.  So we have something mandatory inside something optional.  Think of it this way: "IF you choose to do something, then you MUST do it like this." Conversely " <<days,mins><+,-><INTEGER>> " -- in this case think: "You MUST specify a time argument, and you MUST do it like this."
+
+A full parsing of " rap ,d[i](g[C]) (STRING) <*PACKAGE[S]*> " would go like this: "If using the ',d' switch with 'rap', the  'i' switch is optional.  If also using the optional ',g' switch the associated arument " STRING " is required but the ',C' switch is optional.  It is mandatory to list one or more PACKAGE/PACKAGES which may or may not be complete names.  Easy, eh?
+
+
+================================================================================
+TODO:
+
+errormsg "Synstax: timer [start [NUMBER,null], stop]"
+
+Read the above: 'timer may optionaly be followed by either 'start' or 'stop'.  If followed by 'start', then that may be followed by a NUMBER and or by 'null'.
+
+Should we have some indication of an active argument?
+
+Philosophy: Case insensitive and 'wild' should be defaults?  An overly broad search may yet be satisfactory and it give some idea how to narrow the search down, but an overly narrow search tells us nothing.

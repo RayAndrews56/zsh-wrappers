@@ -1,0 +1,35 @@
+COMMENTS ON HELP SCREENS (this will probably be more current than version in 'raysyntax.txt').
+
+Brief:
+
+'Radio button' arguments (only one of a selction may be active) are enclosed in curly braces: '{}'.
+Mandatory arguments are enclosed in angle brackets: '<>'.
+Optional arguments are enclosed in square brackets: '[]'.  '[] ...' means more than one.
+'Compound' switches along with their mandatory argument, use parenthesis: " () ".
+Arguments are shown unbracketed in example lines featuring the use of that argument.
+
+-------------------------------------------------------------------------------
+RULE: The line for the dash switches is always the same and always comes first, followed by the line(s) for the comma and dot switches.
+
+As many 'example' lines as needed should be used to show each 'form' of the command rather than writing gramatical mostrosities on one line (see 'rap').  The goal of the help text is to clarify, so rules are secondary to clarity.  Only explain what needs to be explained.  However these rules seem useful:
+
+Switches are not enclosed/bracketed unless there is more than one option for any given 'issue' (as commonly happens with lastish switches) -- this is a 'radio button' situation -- in which case they are enclosed in curley braces: " {} ".  Thus " f ,{ANC}{defl}cmv " means: "the last instance of either 'A', 'N' or 'C' will be active; the last instance of either 'd', 'e', 'f' or 'l' will be active; and none or any or all of 'c', 'm' and 'v' will be active."  With single letter switches there's no need for a separator but with double letter swiches and with arguments, the pipe symbol '|' will separate multiple options (eg: "g {b|bb}").
+
+RULE: Arguments that are mandatory in all circumstances are enclosed in angle brackets: " <> ".
+
+RULE: Optional arguments are enclosed in square brackets: " [] ".
+
+Bare arguments are optional but are the 'subject' of the example line in which they occur.  This is difficult to explain but an example should suffice:
+
+g ,r <STRING> [: *PATH*] ...  [: SWITCHES]
+g ,r <[\"]STRING[\"]> [*PATH*] ...  --include=FILESPEC [SWITCHES]
+
+...  We don't bracket " --include=FILESPEC  " because showing an example of that argument's usage is the specific purpose of that example.
+
+RULE: 'Compound' switches along with their associated argument, use parenthesis: " () " eg:
+" rap ,d[i](g[C]) (STRING) <*PACKAGE[S]*> ".  If the ',g' switch is used, it requires the coresponding argument '(STRING)'
+
+RULE: In " [<days,mins><+|-><INTEGER>] " 'days','mins', '+' and '-' are literal strings whereas 'INTEGER' means 'some integer'.  Thus, capitalized words are descriptive whereas all others are litteral.  Thus, the above (from the 'f' command) would read: "It is optional to modify the command with a 'time' argument, but if you do, either 'days' or 'mins' must be followed by either '+' or '-' which must be followed by an integer.  So we have something mandatory inside something optional.  Think of it this way: "IF you choose to do something, then you MUST do it like this." Conversely " <<days,mins><+,-><INTEGER>> " -- in this case read: "You MUST specify a time argument, and you MUST do it like this."
+
+A full parsing of " rap ,d[i](g[C]) (STRING) <*PACKAGE[S]*> " would read like this: "If using the ',d' switch with 'rap', the  'i' switch is optional.  If also using the optional ',g' switch the ',C' switch is optional but the associated arument "STRING" is required.  It is mandatory to list one or more PACKAGE[S] which may or may not be complete names.  Easy, eh?
+
