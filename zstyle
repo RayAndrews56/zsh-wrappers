@@ -1,0 +1,105 @@
+#!/usr/bin/zsh
+
+# Called from near the bottom of: /aWorking/Zsh/Boot/zshrc
+# Options, completions and autoloads.
+
+# =============================================================================
+# OPTIONS:
+
+# http://zsh.sourceforge.net/Doc/Release/Options.html#Description-of-Options
+
+setopt autocd				# Very nice, dir name is command to cd to that dir.
+setopt autopushd			# 'cd' pushes current dir to stack before move.
+setopt caseglob 			# Make wildcard expansion case insensitive.
+setopt completeinword		# Completion can work from both ends.
+setopt completealiases		# Alias is distinct command for completion?
+setopt extendedglob			# Need this!
+setopt globdots
+setopt globstarshort		# ** = **/*
+setopt kshoptionprint		# Print full list of options on or off.  Good.
+setopt nullglob				# Overrides nomatch. No error msg if not found.
+setopt prompt_subst			# Needed for my prompt to work.
+setopt pushdsilent			# Good, don't echo changed directory.
+setopt transientrprompt		# Overwrite right margin prompt as needed.
+
+# History:
+setopt extendedhistory		# Save timestamps.
+setopt sharehistory
+setopt histignorespace
+setopt histignorealldups
+setopt histreduceblanks		# Remove superflous spaces.
+setopt incappendhistory		# Add history items immediately.
+
+# Debugging:
+#setopt warncreateglobal	# Warn if global var is being created.
+#setopt warnnestedvar		# Nested variables?
+#setopt printexitvalue		# This could be useful for debugging
+#setopt sourcetrace			# For debugging?
+
+# Other possibilities:
+#setopt SH_WORD_SPLIT 		# BAD!  Lines split on words.
+#setopt notify				# Notify background jobs finished.  Irrelevant.
+#setopt interactivecomments	# Who needs to comment interactively?
+#setopt pushdminus			# Swap +/- reference numbers to directory stack.
+#setopt pushdtohome			# pushd goes home if no argument.  Don't need.
+#setopt cdablevars			# Try to expand arg to 'cd' with '~' prepended.
+#setopt ignoreeof			# Do not exit on EOF, must 'exit'.
+#setopt noclobber			# Give warning message for overwrite.
+#setopt nohup				# Send HUP to running jobs on exit ???
+#setopt noshortloops		# I don't need to forbid I just don't do.
+
+# Set by default: NB there are at least two dozen 'no...' options that are set 'off' by default which means that the 'positive' form of the option is on. eg. if 'nohup' is off then 'hup' is on.
+
+#interactive
+#monitor
+#shinstdin
+#zle
+
+# END of options
+# =============================================================================
+# COMPLETIONS:
+
+zstyle ':completion:*:default' list-colors ${(s.:.)LS_COLORS}
+zstyle ':completion:*' auto-description 'specify: %d'
+zstyle ':completion:*' format 'Completing %d'
+zstyle ':completion:*' list-prompt %SAt %p: Hit TAB 'for more', or the char to insert%s
+zstyle ':completion:*' select-prompt %SScrolling active: current selection at %p%s
+
+# allow approximate
+# Original: zstyle ':completion:*' completer _complete _match _approximate
+
+#{
+# This will not complete:
+# Sky\ above\ 49°30\'N\ 123°30\'W\ at\ Sun\ 2020\ Dec\ 20\ 20\ 26_files/
+# ... it won't finish the " _files " part:
+# As of 2021-02-08 it *will* complete but it takes three presses of TAB:
+#zstyle ':completion:*' completer _files _expand _complete
+
+# This completes on one press of TAB.
+zstyle ':completion:*' completer _expand _complete _files
+#}
+
+#Tab completion should be case-insensitive.
+# Original: zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'
+zstyle ':completion:*' matcher-list '' 'm:{a-z}={A-Z}' 'm:{a-zA-Z}={A-Za-z}' 'r:|[._-]=* r:|=* l:|=*'
+
+zstyle ':completion:*' verbose true
+zstyle ':completion:*:match:*' original only
+zstyle ':completion:*:approximate:*' max-errors 1 numeric
+zstyle ':completion:*:expand:*' tag-order all-expansions
+# cd should not select parent dir:
+zstyle ':completion:*:cd:*' ignore-parents parent pwd
+
+# End of completions.
+# ==============================================================================
+# AUTOLOAD:
+
+# 2019-12-13: Bart says this must happen *after* all 'zstyle's in 'zstyle'.
+
+#autoload -U compinit && compinit -d ./zcompdump
+autoload -U compinit && compinit -d $ZSHBOOT/zcompdump
+autoload -U colors && colors
+autoload -U select-word-style && select-word-style shell
+autoload zmv
+# autoload -Uz run-help
+# unalias run-help

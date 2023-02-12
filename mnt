@@ -1,0 +1,244 @@
+#!/bin/zsh
+
+: <<'COMMENTBLOCK'
+
+mnt is a rather specialized function that will mount every 'ext4' partition found on a given disk to a corresponding directory '/media/sd?/??'.  The 'sd?' directory must exist for the given disk, but the '??' mountpoints will be created and removed as required.  mnt also prints out a nice listing of the mounts in one of several available sortations.
+
+2022-11-16: Roman's test: for empty mountpoint or not.
+
+2022-10-08: Better formatting and colorize 'media'. Fantastic simplification, sizes are now human readable but also sorted correctly.  Old code removed.
+
+2022-10-07: Cut all worries about existing mountpoints, just leave them be and create as needed. Don't delete them it's more trouble that it's worth.  But do warn if a mount point has existing contents.
+
+2022-10-07: BUG! If files exist on the mountpoint they 'disapear' when a partition is mounted there, but once the partition is unmounted those files are visible there again.  BUT IF THE MOUNTPOINT IS DELETED, THE FILES ARE DELETED AS WELL!  This could obviously create a disaster if files were moved or copied to what was thought to be a mounted partition but was in fact copied 'hard' to /media/sd?/? I know I've made that mistake many times.
+
+2022-10-01: Offer the chance to ignore already existing mountpoint:	
+2022-10-01: BUG! Error checking wasn't working:
+
+2022-09-30: BUG! Must test for vv or there is no mount:	
+
+2022-09-15: 'timer' reports this is much faster: (ca 2ms vs. 10 or 20ms): using findmnt instead of mount to test existing mounts.  Command line test is about 60 ms vs. about 300 ms for previous efforts.
+
+2022-09-12 We were double mounting if trying to mount all partitions on the same drive as currently in use:
+
+TODO: make mount of single partition?
+
+COMMENTBLOCK
+
+function mnt ()
+{
+	local srt="Mount Order"	# Default.
+	local msg="Mounting partitions ..."
+	local unmount="no"
+	# Must null these arrays between calls or after unmounting, say, sdb, it will still show the partitions as mounted.
+	typeset -a mnt0=()
+	typeset -a mnt1=()
+	typeset -a mnt2=()
+
+	[[ ${1:0:1} == '-' ]] && dash_switch mnt $1 && return $?
+
+	[ -n "$1" ] && cnt=${#1}
+	if [[ ${1:0:1} == ',' ]]; then
+		for ((i=1; i<cnt; i++)); do
+		case ${1:$i:1} in
+			b ) lsblk -o NAME,MOUNTPOINT,LABEL,SIZE; return 1 ;;
+			o ) srt="Mount Order" ;; # default
+			l ) srt="Label" ;;
+			p ) srt="Partition" ;;
+			m ) srt="Mountpoint" ;;
+			s ) srt="Size" ;;
+			f ) srt="Free" ;;
+			u ) srt="Used" ;;
+			% ) srt="Percent Used" ;;
+			U ) unmount="yes"; msg="Unmounting partitions ..." ;;
+			* ) errormsg "No such switch >,${1:$i:1}<"; return 1 ;;
+		esac
+		done
+		shift # Do this here. There might not be any switches!
+	fi # End: Process switches.
+
+	[[ ! "$1" && "$unmount" == 'yes' ]] && errormsg "No disk specified" && return 1
+
+# =============================================================================
+# If a drive is given, mount or umount, else fall thru to list of already mounted partitions:
+
+	if [ -n "$1" ]; then
+		[[ ! "$1" == sd[a-z] ]] && errormsg "'$1' is not a valid hard disk!" && return 1
+		# Test for no such disk: (valid name but it doesn't exist):
+		[[ ! -b /dev/$1 ]] && errormsg "No such disk!" && return 1
+
+		disk="$1"
+		actionmsg "\n$msg" # 'Mounting ...' or 'Unmounting'.
+
+		# For all mounted devices matching the argument eg. 'sda':
+		# NB " /dev/$disk?* "  ... the '?' insures there is at least one character there!  Otherwise " /dev/sda " would show up in the list. " (n) " gives numeric sort.
+		for ppartition in /dev/$disk?*(n); do	# eg: " /dev/sda11 "
+
+			# Cut off everything but the digits:
+			partition_number="${ppartition#/dev/sd[a-z]}"
+
+			# Skip partition '1', which is always swap, and '4' which is always extended.
+			[[ $partition_number == (1|4) ]] && continue
+
+			mmountpoint="/media/$disk/$partition_number" # Eg: " /media/sdb/8 "
+
+			# 'found' = '1' when a mount point (/media/sd?/??) is in use, as it will be after using 'mnt', OR if one of the mount points is in use via some other method -- nothing should ever be mounted there except by 'mnt' but you never know:
+			findmnt $mmountpoint &> /dev/null && ffound=1 || ffound=0
+
+# -----------------------------------------------------------------------------
+# UNMOUNTING: We unmount based on '/media/sd?/??' mountpoints.
+
+			if [[ "$unmount" == "yes" ]]; then
+				# Has grep found the mountpoint in use?  If so, unmount it.
+				if (( ffound)); then
+					# Cut all worries about existing mountpoints, leave them be and create as needed. Don't delete them.
+					umount -v "$mmountpoint" || 
+					{
+						# Helpful diagnostics if partition won't unmount:
+						advicemsg "\nCan't unmount $mmountpoint.  Is a terminal logged on?  Or is it one of these programs:?\n"
+						# 'list open files': columns delimited by space, keep columns one and nine, keep last ten lines:
+						lsof | grep $mmountpoint | cut -d ' ' -f 1,9 | grep -v 'gmain' | grep -v 'gdbus' | tail -5
+						echo
+					}
+				else
+					vv=$( findmnt $ppartition -o target -n )
+					# MESSAGE in case a partition is mounted other than on '/media/sd?/??' and thus not to be unmounted.  Must test for vv or there is no mount:					
+					[ "$vv" ] && warningmsg "$ppartition remains mounted on: ${grn}$vv" | sed 's,\([^0-9][0-9]\) ,\1  ,g'
+				fi
+
+# -----------------------------------------------------------------------------
+# MOUNTING: We mount based on '/dev/' ... don't double mount!
+
+			else # We are mounting, not unmounting:
+				if (( ffound )); then
+					# MESSAGE in case the '/media/sd?/??' mountpoint is already in use (some partition is mounted there).  This can happen if running the same 'mnt' command twice -- there's nothing to do, but it isn't an error.
+					infomsg "$ppartition is already mounted on ${grn}$mmountpoint" | sed 's,\([^0-9][0-9]\) ,\1  ,g' # Green
+					continue
+				fi
+
+				# We were double mounting if trying to mount all partitions on the same drive as currently in use:
+				findmnt $ppartition &> /dev/null && ffound=1 || ffound=0
+
+				if (( ffound )); then
+
+					vv=$( findmnt $ppartition -o target -n )
+					# MESSAGE in case the partition is already mounted somewhere but NOT on an official 'media/sd?/??' mountpoint.  This is usually because it's been mounted in fstab.  It is not an error.
+					infomsg "$ppartition is already mounted on ${grn}$vv" | sed 's,\([^0-9][0-9]\) ,\1  ,g' # Violet
+					continue
+				fi
+
+				# Cut all worries about existing mountpoints, just leave them be and create as needed.
+				# Roman's test:
+				[[ -n $mmountpoint(#qNF) ]] && \
+				{
+					warningmsg "\nFiles already exist in \"$mmountpoint\", they will be hidden for the duration of the use of that directory as a mount point. Here's the current contents:\n"
+				
+					t ,f 2 "$mmountpoint"	# What is the contents of /media?  Check for bogus contents. (My 't()' function.)
+				
+					inputmsg "\nPress 'y' to continue mounting or any other key to abort.\n"
+					read -sq || { redline "Skipping $ppartition"; continue }
+				}					
+				mkdir $mmountpoint &> /dev/null
+				mount -vt ext4 $ppartition $mmountpoint ||
+					{ errormsg "MOUNT FAILURE! 'mount' returns: $?"; return }
+			fi # if mounting.
+		done # For all partitions.
+	fi # We had a specified disk, otherwise just show already mounted:
+
+# =============================================================================
+# Create and print listing of mounts:
+
+	mnt2=( "$( findmnt -t ext4 -o label,source,target,size,avail,used,use% -l -n )" )
+	
+	# Massage output:
+	mnt2=( "${(f)$( print -l $mnt2 \
+		| sed \
+		-re 's, /,   /,g' \
+		-e 's, ([[:digit:]]),   \1,g' \
+		-e 's,  ([0-9]*)([K,M,G]) ,\1.0\2 ,g' \
+		-e  's,/dev/,,g' \
+		-e  "s,/media/,/${grn}media${nrm}/," \
+		-e  "s, (sda[0-9]*) , ${red}\1${nrm} ," \
+		-e  "s, (sdb[0-9]*) , ${yel}\1${nrm} ," \
+		-e  "s, (sdc[0-9]*) , ${blu}\1${nrm} ," \
+		)}" )
+# Explanation of sed lines:
+#	-re 's, /,   /,g' \						# increase spacing before '/'
+#	-e 's, ([[:digit:]]),   \1,g' \			# increase spacing before any number
+#	-e 's,  ([0-9]*)([K,M,G]) ,\1.0\2 ,g' \	# add '.0' where needed.
+#	-e  's,/dev/,,g' \						# remove '/dev' leaving '/media...'
+#	-e  "s,/media/,/${grn}media${nrm}/," \	# colorize 'media' NB double quotes!
+
+	infomsg "
+Sorting by $srt: (Options: ,o ,l ,p ,m ,s ,f ,u ,%)
+
+Label:     Partition:    Mountpoint:      Size:    Free:    Used:   %Used:\n"
+
+	#  Sort order: o = Mount Order: (chronological (DEFAULT)), l = Label, p = Partition (device), m = Mountpoint, s = Size, f = Free, u = Used, % = % Used.
+	case $srt in
+		"Mount Order" )     print -l $mnt2 ;;
+		"Label" )			print -l $mnt2 | sort -k1 -b --version-sort ;;
+		"Partition" )		print -l $mnt2 | sort -k2 -b --version-sort ;;
+		"Mountpoint" )		print -l $mnt2 | sort -k3 -b --version-sort ;;
+		"Size" )			print -l $mnt2 | sort -k4 -h ;;
+		"Free" )			print -l $mnt2 | sort -k5 -h ;;
+		"Used" )			print -l $mnt2 | sort -k6 -h ;;
+		"Percent Used" )	print -l $mnt2 | sort -k7 -h ;;
+	esac
+
+	# Spin down disk after unmounting:
+	[[ "$unmount" == "yes" ]] && hdparm -y /dev/$disk
+	return 0
+} # End: mnt
+
+# =============================================================================
+
+function _mnt-syntax ()
+{
+echo -e "
+$_common_syntax
+
+mnt ,b: show information on all Block devices
+mnt ,U (disk): Umount 'disk'
+mnt ,{olpmsfu%} (disk):
+
+Sort mounted filesystems by:
+
+,o: Mount Order (that is, don't sort it at all).
+,l: Volume 'L'abel alphabetically (default).
+,p: Proper name of the partition or device, eg. \"/dev/sdb2\".
+,m: 'M'ountpoint: eg. \"/media/sdb/2\".
+,s: Size: (1M-blocks): The size of the device in MB eg. \"9949M\".
+,f: Free: MB of the device that are unused.
+,u: Used: MB of the device in use.
+,%: Percent Used (%Used).
+
+'disk': the disk to mount or umount (eg: 'sda')"
+} # mnt-syntax
+
+function _mnt-usage ()
+{
+echo -e "
+USAGE: 'mnt' lists all mounted ext4 filesystems and optionaly mounts/unmounts all ext4 filesystems on the specified disk (if they have not already been mounted). The mount points are all under '/media/(device)/(partition number)', eg: device: '/dev/sda12' will be mounted on '/media/sda/12'.  With the ',u' switch, unmount all the '/media/(device)/(partition number)' partitions. 'mnt' is based on 'df' 'mount' and 'findmnt'.  Use 'df' to look at all mounted filesystems. 'lsblk' is also useful.
+
+If there is no switch following 'mnt' the list of all mounted devices/partitions is shown sorted by the order in which they were mounted (same as 'mnt -o').
+
+${red}  mnt sdc${nrm}
+Mount all the partitions on '/dev/sdc' to '/media/sdc/??'.
+
+${red}  mnt ,U sda ${nrm}
+Unmount all the partitions on '/dev/sda' from '/media/sda/??'
+
+Note that partition #4 on most disks is the 'extended partition' and will not be shown. Ditto partition #1 which by my convention is always swap.
+
+To unmount manually:
+${red}  umount /media/sdb/5 ${nrm}
+
+To mount manually:
+${red}  mount -vt ext4 /dev/sda2 /media/sdb/3 ${nrm}
+
+To move a mountpoint:
+${red}  mount -o remount,rw /dev/sdb5 /media/sdb/3 ${nrm}
+"
+	_mnt-syntax
+} # mnt-usage

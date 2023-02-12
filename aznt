@@ -1,0 +1,670 @@
+#!/usr/bin/zsh
+
+: <<'COMMENTBLOCK'
+DIAGNOSTIC CODE:
+
+#echo $NKEY | od -t x1 > /dev/pts/3 # Dump the key value in hex to a terminal.
+#varis ,2s !
+#printf  "IN: %-20s %s\n" ${(kv)IN} > /dev/pts/2
+#typeset -p $1 > /dev/pts/2
+#typeset -p IN > /dev/pts/2
+
+COMMENTBLOCK
+
+# =============================================================================
+# Initialize all user fce:
+
+n_init ()
+{
+	# Clean up if we crashed previously (usedto create disaster exiting the help screen):
+	n_exit 2> /dev/null
+
+	typeset -g NFUNCTION= # Name of calling function.  Used by nnoptions() -- we need to insure a SELECT does not quit but loops.
+
+	typeset -g MSG= # sstatus line messages. Only nnoptions() using this.
+
+	# _DRAW can be _PAGING, or _IDLE.  These are signals to nn_draw() from nn_input() and nn_list() as to what sort of redrawing is needed  See comment at the top of nn_draw().
+	typeset -g DRAW='PAGING' # First draw needs to create first page. nnview uses this to force paging too.
+
+	# Contains index of current selection.  Only used externally by nnview() but declared here because possibly of general use.
+	typeset -gi INDEX=
+
+	# This forces an initial search, which might not be wanted, see 'c'. Only used externally by nnpanelize():
+	typeset -g SEARCHBUF="$1"
+
+	# nnview() needs this global.  Why not?  Fce might have reason to query the keystroke:
+	typeset -g NKEY=		# The last keystroke, litteral or nemonic like 'UP'.
+	typeset -g SELECTED=	# Used universally to return selection.
+	typeset -g ERRLINE=		# Report keystroke errors.
+
+	# Array 'mmain' holds the geometry of the mmain window. Note that in nn_list(), there is only one working window, and the second array 'IN' isn't really needed, however in nnview() there are two working windows, so 'IN' is needed.
+	# IN is now local to individual functions since nnview needs local declarations. mmain must be global or nnoptions can't loop because contents lost on restart!
+	typeset -gA main=()
+	typeset -g ACTION='START' 	# What we're doing: SSTART, SSELECT, SSEARCH and unset. nnoptions likes this global to flag a restart/loop.
+
+	# Variables used by new navigation with line wrapping:
+	typeset -ga ARRAY=()		# Holds cursor position.
+	typeset -gi this_bottom=	# RELATIVE bottom element.
+	typeset -gi next_top=1		# Index of top of next page.
+	typeset -gi Pagecount=1		# Number of current page
+	typeset -g  Pagetop=()		# Remember topE for each page visited.
+	Pagetop[$Pagecount]=1		# Top page starts at 1.
+
+	zmodload zsh/curses
+	zcurses init
+
+} # END: n_init().
+
+# =============================================================================
+# Called by all user functions except nnview(). This outputs a list of elements that can be navigated with keyboard or mouse then a selection made.  The line selected will be input to the execution of some command:
+n_list ()
+{
+	# Not '$1', we might want to start a list with a blank line or msg eg. c() !!:
+	[[ -z "$@" ]] && return 1 # Nothing to process.
+
+	emulate -LR zsh
+	setopt localoptions typesetsilent localtraps extendedglob noshortloops
+	local IFS=$'\n'
+
+# n_list(): Traps accessed on return: -----------------------------------------
+
+	# Trapped by '^C': Destroy any and all windows.
+	TRAPINT () { n_exit; actionmsg "User break"; return 130 } 
+
+	# Trapped by any exit of the program ('q' for example) except '^C'. WARNING: 'return 0' in this line would mean return from the CALLING function not return from n_list()!!  'trap' erases windows on return but we don't want that if LOOPING -- In nnoptions() ENTER quits nn_list as usual but it loops (restarts) after the option value has been toggled, so we only kill the windows when we are NOT LOOPING.
+	trap '[ $ACTION = QUIT ] && { n_exit; echo Successful_exit }' EXIT
+
+# n_list(): Local variables: --------------------------------------------------
+
+	local Bold="bold"		# Draw the list (text, borders) in bold. One use.
+	local Color="${green}"	# Color of searched-for text, one use.
+	local msg=
+	local prev_buffer=		# For backing out of a search.
+	# List is the entire data to be shown. It is an array of lines which will be accessed via their subscripts (i.e. elements or indexes): Note, it changes between calls to nnoptions()! We will use 'LList' directly, not via 'mmain[list]' since it makes indexing easier:
+	local List=( "$@" )
+
+# n_list(): Calculate, create and initialize windows mmain and sstatus: -------
+
+	# We don't recreate or intialize the windows if we are LOOPING:
+	[ "$ACTION" = 'START' ] &&
+	{
+		n_make_main
+		#  When starting we force SSEARCH *if* there's something in SEARCHBUF as eg: '$ n_init some_string'.  NB we can backspace out of this preloaded search same as any other search.
+		[ "$SEARCHBUF" ] && ACTION='SEARCH'
+	}
+	# This takes us to the first active line eg, bypass messages in c():  See comment line ca. 615:
+	while [[ ! "$List[$main[currentE]]" \
+	     || "${${List[$main[currentE]]}[1]}" == ':' ]]; do
+		(( main[currentE]++ ))
+	done
+
+	# When backing out of a search we draw the list with the current line (after the comments and blanks) highlighted. NB do this before LOOPING test below!
+	local skiplines="$main[currentE]"
+
+	# Special case: when nnoptions is looping we must perform a search if there is anything in the buffer, so as to return the list to it's previous state, however we do not want to be in search *mode* and we take care to highlight the correct line since nn_search will want to return the cursor to the top line. Global AACTION will be unset when looping which flags this operation:
+	[ "$ACTION" = 'LOOPING' ] && { n_search main; main[currentE]="$INDEX" }
+
+# -----------------------------------------------------------------------------
+# n_list(): Draw the virgin list then redraw as searching and scrolling, etc. require as each command keystroke is processed:
+while (( 1 )); do
+
+# n_list(): Handle searching, filter with SEARCHBUF : -------------------------
+
+	if [[ "$ACTION" = 'SEARCH' ]]; then
+		List=( "$@" ) # Virgin list every itteration of search.
+		# This takes the name of array.  No dollar sign!!
+		n_search main  
+	else # We aren't searching so show the normal sstatus message:
+		prev_buffer= # Must kill this.
+		msg="Current: #$main[currentE] of #$main[lastE] entries. Filter:  [$SEARCHBUF].  'h' for help, '/' to begin search."
+	fi
+
+# n_list(): Draw the list, the msg, and refresh: ------------------------------
+
+	[ "$MSG" ] && msg="$MSG" # $MSG can be external message from noptions().
+	n_msg "$msg" 
+
+	# nn_draw handles it's own refreshing.
+	n_draw main 0 1 # Moving output one char right looks better.
+	# The last window refreshed 'owns' the cursor and if we are searching we want the cursor in the sstatus window.
+	[ "$ACTION" = "SEARCH" ] &&	zcurses refresh Status 
+
+# nn_list(): Draw complete, now get another keystroke: ------------------------
+
+	ERRLINE=
+	local click_flag= 	# Pass mouse clicks.
+ 	n_get_key
+
+	# Whether searching or in mmain window, a click always SELECTS.
+	[ "$NKEY" = 'CLICKED' ] && 
+	{	[[ "$click_flag" > 1 ]] && (( main[currentE] = click_flag + IN[topE] -1 ))
+		ACTION='SELECT' # Processed below.
+	}
+
+# nn_list(): We are SEARCHING: ------------------------------------------------
+
+	# Legal keys: UP/DN ENTER BKSP or printable char added to search string:
+	if [ "$ACTION" = "SEARCH" ]; then
+	case "$NKEY" in
+		(UP)   ;& 
+		(DOWN) ;& 
+		($'\n')	ACTION='MAIN' ; continue ;; # Enter or UP/DN returns to filtered list. No need for redraw.
+		($'\b'|BACKSPACE) SEARCHBUF="${SEARCHBUF%?}" ;; # Backspace one char.
+		# Filter out non-printable chars from the search string:
+		# Illegal key handling, accept normal characters only please.
+		(*)	[[ "$NKEY" = ([[:print:]]) ]] && SEARCHBUF+="$NKEY" \
+										  || { ERRLINE="$0:$LINENO"; NKEY= ; } 
+	esac
+
+# nn_list(): NOT SEARCHING: Actions that don't involve a redraw: --------------
+
+	else
+	# Legal keys: q ENTER / h or the navigation keys processed in nn_input:
+	case "$NKEY" in
+		(q|Q)   ACTION='QUIT'; return 0 ;;
+
+		# We must always force redraw when nnoptions is remembering:
+		($'\n') ACTION='SELECT'; DRAW='PAGING' ;;
+		# Inconsistent second searches if we don't force paging:
+		(/)     ACTION='SEARCH'; DRAW='PAGING'; continue ;; # Begin a search.
+		(h|H)	# Display the help screen.
+			n_msg "Any key to exit help ..."
+			zcurses refresh Status
+			ACTION='MAIN'
+			n_help $help_body 	# Only call. hhelp_body is a global variable set in user functions with help screen specific to that function.
+			zcurses input help 	# Wait for a keystroke.  NB 'read' does not work.
+			# Otherwise zcurses complains window already exists next time we call help: 
+			n_exit help ! # '!'= don't do: 'zcurses end'.
+			continue ;; # Back to while (( 1 )), line 130.
+	esac
+		# Any left click any time, or ENTER when in the mmain window.
+		[ "$ACTION" = 'SELECT' ] && 
+		{
+			# All purpose escape code stripper:
+			INDEX=$main[currentE];
+			SELECTED=${List[$INDEX]//$'\e'\[([0-9](#c1,2)(;[0-9](#c1,2))#)#[mGK]/};
+			# 2022-12-28: BUG! 'c()' and others were not QUITING!! 
+			[ "$NFUNCTION" != 'noptions' ] && ACTION='QUIT'
+
+			return 0
+		}
+# nn_list(): Not searching. ---------------------------------------------------
+# nn_input handles keystrokes that might involve a redraw:
+		n_input main
+	fi # END: keystroke processing.
+	[ "$ERRLINE" ] && \
+	{	# Wait 2 seconds before returning to search.
+		n_msg "$ERRLINE: Error! Illegal key ..."
+		zcurses refresh Status; sleep 2
+	}
+done # while (( 1 ))
+} # END: nn_list().
+
+# =============================================================================
+# Initialize and create both mmain and sstatus windows:
+n_make_main ()
+{
+	# WH: window hight, WW: window width:
+	integer mainWH=$LINES-1 # Num of lines on screen minus one for sstatus line.
+	integer mainWW=$COLUMNS # The width of the screen in characters.
+
+	# Protocol: Values of one and zero will be given literally not held by variables.  Note that the starting positions of the windows are zero based and absolute, not relative. nn_window() draws window and it's border:
+
+	#	     Name,	Height,    Width,	 Y strt,  X strt, Body col,    Border col
+	n_window Main   "$mainWH" "$mainWW"  0 	      0  white/black  default/default
+	n_window Status 1 		  "$mainWW" "$mainWH" 0  yellow/blue
+
+	# No need to do this more than once:
+	zcurses attr Main $Bold white/black
+
+# nlist(): Initialize 'mmain' array.  10 elements: ----------------------------
+# 5 Fixed elements:
+	  main[window]=Main		# nn_draw() needs the name of the window.
+	    main[list]=List		# 'mmain[list]' holds the name of the data array.
+	   main[lastE]=$#List   # Index of last line of data, entire length, NOT relative to window. NB recalculated after any search.
+	   main[hight]=$(( mainWH-2 ))	 # Border of one char all around.
+	   main[width]=$(( mainWW-2 ))
+# 5 Variable elements:
+	# Absolute index of bottom element on current page, in practice, wrapping will reduce the number of elements in the window.
+	 main[bottomE]=$main[hight] 
+	    main[topE]=1	# Absolute index of the element at the top of the window.
+	main[currentE]=1	# Absolute index of the highlighted element which will be returned to the calling function when ENTER is pressed.
+	  main[active]=1	# Used in nview(), sets bolding on/off once use here.
+}
+
+# =============================================================================
+# Three calls here for windows: mmain, sstatus and hhelp.  If a border is specified (by including a 7th argument which is the color of the border) we create a window within a window -- the outer window eg: 'MainB' just holds the border which is permanent, and only has to be drawn once.  The inner window eg: 'mmain' holds the content and is redrawn as needed.  The writeable area of 'mmain' is thus reduced by one char all around.  NB sstatus window has no border.  Syntax: n_window <Window name> <Height> <Width> <Abs. Y start> <Abs. X start> <fg/bg colors of body> [fg/bg colors of border (if any)].
+
+n_window ()
+{
+	# H: hight, W: width, Y: vertical start, X: horizontal start.
+	# Main data window is full size if there is no border:
+	integer H=$2 W=$3 Y=$4 X=$5
+
+	[ "$#@" = 7 ] && # We have a border.
+	{
+		zcurses addwin  ${1}B "$2" "$3" "$4" "$5"
+		zcurses bg      ${1}B "$7" 	# Foreground/Background of border.
+		zcurses border  ${1}B
+		zcurses refresh ${1}B		# Nothing 'happens' until we refresh:
+		# We have a border so mmain data window is shrunk:
+		H=$2-2 W=$3-2 Y=$4+1 X=$5+1
+	}
+	zcurses addwin  ${1} "$H" "$W" "$Y" "$X"
+	zcurses bg      ${1} "$6" 	# Foreground/Background of mmain window.
+	zcurses refresh ${1}
+} # END: nn_window().
+
+# =============================================================================
+# If we are searching. Compute new list as each keystroke filters more narrowly. ENTER or up/dn arrows ends search. Note, buffer can be preloaded when '$1' is given to nn_init().  But see 'c()' as an example of the argument to the function NOT being wanted as an initial search since that removes various heading lines.
+n_search ()
+{
+	# Begin a search:
+	if [[ ! "$SEARCHBUF" && ! "$prev_buffer" ]]; then
+		msg="Begin case insensitive search ... "
+return
+	# There is no search, but there was in previous loop. i.e. we are searching, but we have backspaced the search to 'all' so start again with virgin list:
+	elif [[ ! "$SEARCHBUF" && "$prev_buffer" ]]; then
+		prev_buffer=
+		msg="No search, keep trying or UP to return to the list ... "
+return
+	# We are actively searching: 
+	elif [[ "$SEARCHBUF" && "$SEARCHBUF" != "$prev_buffer" ]]; then
+		prev_buffer="$SEARCHBUF"
+		msg="Filtering with: $SEARCHBUF"
+
+	local -A IN
+	set -A IN ${(Pkv)1} # Don't quote! $1 is the name of the array.
+
+	# In case we have paged down a search must always start from a fresh list *at the top of the list* not from whatever page we are on:
+	IN[topE]=1
+	# When backing out of a search we draw the list with the current line (after the comments and blanks) highlighted. NB nview() doesn't use skiplines so avoid 'bad set of key/value pairs msg:
+	[ "$skiplines" ] && IN[currentE]=$skiplines || IN[currentE]=1
+
+	IN[bottomE]=$IN[hight]
+	local var=( ${(P)IN[list]} )
+	IN[lastE]=$#var
+		# Comments for lines below:
+		# 1) First remove lines starting with colon, they are messages.
+		# 2) Next do the filtering:  Note that the search is not incremental even tho it looks like it is -- the search is always in the virgin list, else backspacing would require each previous search result to be saved separately:
+		# 3) Now colorize the search string green. '#b': backreferences active, 'i':  case-insensitive.
+		# Thanks Roman and Bart:
+
+		set -A $IN[list] "${(@MP)IN[list]:#^:*}"
+		set -A $IN[list] "${(@MP)IN[list]:#(#i)*$SEARCHBUF*}"
+		set -A $IN[list] "${(@MP)IN[list]//(#bi)($SEARCHBUF)/$Color${match[1]}$nrm}"
+
+		local var=( ${(P)IN[list]} )
+		IN[lastE]=$#var
+	fi
+	set -A "$1" ${(kv)IN} # Write to the named window/array (usually 'main').
+} # END: nn_search
+
+# =============================================================================
+# nn_draw(): Two calls in nnview() and one in nn_list(). Draw one page. $1: the name of the window, $2: the vertical offset down, $3: the horizontal offset to the right. _DRAW is a signal from nn_list() or nn_input() as to what level of redrawing is needed.
+
+# _IDLE: The page hasn't changed, there's nothing to do so return.
+
+# _PAGING: Creating a new page is needed -- on starting, whenever paging hops to a new page, when we are scrolling past the bottom or top of the page and thus a new page draw is forced even tho we are not paging explicitly.
+
+# Note that explicit keystrokes will be overruled as needed, eg if PGUP takes us to a new page, _PAGING will be forced.
+
+n_draw ()
+{
+	[ "$DRAW" = 'IDLE' ] && return # Nothing has changed therefore there's nothing to do, eg. up arrow when already at the top of the list.
+	
+	local -A IN
+	set -A IN ${(Pkv)1} # Don't quote! $1 is the name of the window. (P): contents will be the name of a variable. (kv): print both array keys and values.
+	# We need to clear before redrawing:
+	zcurses clear "$IN[window]"
+	local win="$IN[window]"
+
+	# 2022-12-29: Now local:
+	local Page=( "${(@f)${(P)IN[list]}[IN[topE],IN[bottomE]]}" )
+
+# n_draw(): -------------------------------------------------------------------
+	# For every line on this page that needs to be redrawn ( sometimes just two lines if UP/DN arrows!)
+	
+	# highlight is relative element NOT relative physical line:
+	typeset -gi highlight=$(( IN[currentE] - IN[topE] + 1 ))
+	integer int
+	# Must initialize! This is just a guess, in case of wrapping it will be less:
+	this_bottom=$IN[hight]
+
+	# Only have to do this because of $3 offset to the right. NB zero base!
+	zcurses move "$win" 0 $3 
+
+	# Must process one too many lines to insure we've scrolled off the bottom.
+	for (( int=1; int < $#Page + 2; int++ )); do
+
+	# No reason to draw elements that don't fit in window:
+	zcurses position $win ARRAY # ARRAY is physical loc relative to window.
+	(( ARRAY[1] > IN[hight] - 2 )) &&
+	{
+		this_bottom=$(( int - 1 )) # Used in nn_input to control scrolling down.
+		(( next_top = IN[topE] + int - 1 ))
+
+#This is slow:
+#zcurses refresh $IN[window]
+#varis ,s2 "ARRAY[1]"
+#varis ,2 int
+#varis ,s2 "ARRAY[2]"
+#varis ,2 "IN[hight]"
+#varis ,2 next_top
+#varis ,2 "Page[int-1]"
+
+		# If cursor is short of the right edge then there can't be a wrap:
+		# But test seems redundant:
+#		(( ARRAY[2] < IN[width] - 1 )) && break
+
+		# 'int' is always 'one too far' before we know there's trouble, so last element displayed is 'int-1'.  If it's too long, then we are wrapping off the bottom of the window. Line  will show again at top of next page.
+		(( ${#Page[int-1]} > $IN[width] )) && (( next_top -= 1 ))
+		break
+	}
+	# Move the cursor: NB These are RELATIVE and PHYSICAL! $2: offset down, $3: offset right.  This is the only cursor move except for one in nn_msg().  Text is always written at the cursor position, and after writing, the cursor is found at the end of that line. But first line has no '+ 1':
+	(( int > 1 )) && zcurses move "$win" $(( ARRAY[1] + 1 )) $3 
+
+	# Current line at cursor pos. will be highlighted: wrapping ok:
+	[ "$int" = "$highlight" ] && zcurses attr "$win" +reverse \
+							  || zcurses attr "$win" -reverse
+
+# n_draw(): For every line: ---------------------------------------------------
+	
+	# Only used l. 446. Only needs to be set once per line: bold or normal:
+	local attrib=
+	# This is used in nnview() where we have two windows, active one is bold:
+	[ "$IN[active]" -eq '1' ] && attrib='+bold' || attrib='-bold'
+
+	local line="$Page[int]" chunk= Xout=
+
+	integer col=0 # White
+	typeset -a COL=( black red green yellow blue magenta cyan white ) # One use.
+	local foreground=
+
+	while [ "$line" ]; do # Process each line.
+	
+# 'line' starts out as a whole line but we can't just print it if it contains either color codes or tabs. First we handle color.  zcurses can't handle ASCII color codes so we must convert them to zcurses color attributes instead.  Each 'chunk' of colored text must be printed separately!  Monstrous test below reads anything up to (but not including) a first color code, into match[1] and then saves that to 'chunk'.  Then it grabs the color, which might be found in match 2,3 or 4, then grabs the rest of the line, including possible further color codes, into match[5] which now becomes the new shorter 'line'. Individual chunks will be printed at the very end of this fce after tabs have been expanded to spaces.  We loop until 'line' is consumed.  Note, if a line starts with a color code the first pass below creates no chunk, but does grab the color. 
+	
+		# Don't move these lines below the 'if' test, or we get dangling colors.
+		# Note clever way of retrieving color word from color number:
+		(( col > 29 && col < 38 )) && foreground="$COL[col-29]" || foreground='white'
+	
+		zcurses attr "$win" "$attrib" "$foreground"/black # Set color for this chunk.
+	
+# n_draw(): For every line : --------------------------------------------------
+	
+	# Color code: "\e[1;31;45m" .match 1,5 are strings, match 2,3,4 are possible colors.
+	
+		if [[ "$line" = \
+(#b)([^$'\e']#)\
+$'\e'\[\
+([0-9](#c0,2))\
+(#B)(\;|)\
+(#b)([0-9](#c0,2))\
+(#B)(\;|)\
+(#b)([0-9](#c0,2))m\
+(#B)($'\e'\[K)#\
+(#b)(*)\
+      ]]; then
+
+# NB "#\" 'comment' coloring just above is incorrect -- it is working code.
+# (#b)			# Start match[1]
+# ([^$'\e']#)	# Leading string up to start of escape code. (or \x1B)
+# $'\e'\[		# Escape code, then '[' character
+# ([0-9]		# Start match[2]: any digit ...
+# (#c0,2))		# 0, 1 or 2 times
+# (#B)			# End match[2]. eg: '1' matched from: '\x1b[1;31;45m'
+# (\;|)			# Either a semicolon or nothing
+# (#b)			# Start match[3]
+# ([0-9]		# any digit ...
+# (#c0,2))		# 0, 1 or 2 times 
+# (#B)			# End match[3]. eg: '31' matched from: '\x1b[1;31;45m'
+# (\;|)			# Either a semicolon or nothing
+# (#b)			# Start match[4]:
+# ([0-9]		#  any digit ...
+# (#c0,2))	 	# 0, 1 or 2 times 
+# m        		# 'm'
+# (#B)			# End match[4]
+# ($'\e'\[K)#	# Escape code then '[K' (any number of matches incl. zero)
+# (#b)			# Backreferences on
+# (*)			# match[5]: remaining text.
+	       
+			chunk="$match[1]" # Text chunk before color code.
+	
+			# Now change the color which can lurk in any of three places:" \e[31;01;43m "
+			if   [[ $match[2] > 29 && $match[2] < 38 ]]; then col="$match[2]"
+			elif [[ $match[3] > 29 && $match[3] < 38 ]]; then col="$match[3]"
+			elif [[ $match[4] > 29 && $match[4] < 38 ]]; then col="$match[4]"
+			else col='00'
+			fi
+	
+			# Text following color code, including possibly more color codes. It will be processed one 'chunk' at a time, stopping at the next color code until 'line' has been consumed:
+			line="$match[5]"
+
+		else 			  # No further color codes are detected.
+			chunk="$line" # 'chunk' is line fragment of one color.
+			line=		  # 'line' is consumed. Final use of 'line'.  MUST ZERO!
+		fi # Color is handled.
+
+# n_draw(): Expand any/all tabs in the chunk: ---------------------------------
+	
+		Xout= # Will end up as the tab-expanded chunk to print with the correct color.
+		#{ scope
+		integer before_len= all_len=
+		while [ "$chunk" ]; do # Consume 'chunk' one TAB at a time:
+			[[ "$chunk" = (#b)([^$'\t']#)$'\t'(*) ]] ||
+				{ Xout+="$chunk"; break }	# No (more) tabs so chunk is finished.
+	
+			(( all_len=(( before_len + ${#match[1]} ) / 4 + 1 ) * 4 ))
+			Xout+="${(r:all_len-before_len:: :)match[1]}"
+			(( before_len += all_len - before_len ))
+			chunk="$match[2]" # 'chunk' is the diminishing remainder of itself.
+		done
+		#} scope
+
+		# Must print each chunk, with it's color, seperately.
+		[ "$Xout" ] && zcurses string "$win" "$Xout"
+	done # while [[ -n "$line" ]] ... for each 'chunk' of the line.
+	done # for (( int=1; int<=end_idx; int++, y_offset++ )) ... for each line.
+	
+	# Refresh here, only when needed -- eg IDLE page needs no refresh.
+ 	zcurses refresh $IN[window]
+} #END: n_draw().
+
+# =============================================================================
+# This only handles keystrokes that might require a recaculation of the display.  Other legal keystrokes are handled in nn_list before this fce is called.  Keystrokes that fail here are thus errors. Two calls in nnview(), one in nn_list().  Argument '$1' is array to write to.
+n_input ()
+{
+	local -A IN
+	set -A IN "${(@Pkv)1}" # Copy the array to IN, the working copy.
+
+	DRAW='PAGING' # This is the default, only exception is IDLE.
+	local tmp=$IN[currentE]
+
+	case "$NKEY" in
+# nn_input(): Navigation: -----------------------------------------------------
+
+	(DOWN)
+		(( IN[currentE] == IN[lastE] )) && DRAW='IDLE' && return
+		(( IN[currentE] += 1 ))
+		(( highlight >= this_bottom )) &&
+		{
+			(( IN[topE] == next_top )) && DRAW='IDLE' && return
+			(( Pagecount += 1 ))
+			# NB only use next_top if moving into virgin territory.
+			[ ! "$Pagetop[$Pagecount]" ] &&
+				(( Pagetop[Pagecount] = next_top ))
+			(( IN[topE] = Pagetop[Pagecount] ))
+			(( IN[currentE] = IN[topE] ))
+		} ;;
+	(NPAGE|" ") #PGDN
+		(( IN[topE] == next_top )) &&
+		{
+			(( IN[currentE] == IN[lastE] )) && DRAW='IDLE' && return
+			(( IN[currentE] = IN[lastE] ))
+		} ||
+		{
+			(( Pagecount += 1 ))
+			# NB only use next_top if moving into virgin territory.
+			[ ! "$Pagetop[$Pagecount]" ] && (( Pagetop[Pagecount] = next_top ))
+			(( IN[topE] = Pagetop[Pagecount] ))
+			(( IN[currentE] = IN[topE] ))
+		} ;;
+	(UP)	# UP arrow
+		(( IN[currentE] == 1 )) && DRAW='IDLE' && return
+		(( IN[currentE] -= 1 ))
+		(( IN[currentE] < IN[topE] )) &&
+		{
+			(( Pagecount == 1 )) && DRAW='IDLE' && return
+			(( Pagecount -= 1 ))
+			(( IN[topE] = Pagetop[Pagecount] ))
+		} ;;
+	(PPAGE) # PGUP
+		(( IN[currentE] > IN[topE] )) &&
+			(( IN[currentE] = IN[topE] )) ||
+			{
+				(( Pagecount == 1 )) && DRAW='IDLE' && return
+				(( Pagecount -= 1 ))
+				(( IN[currentE] = IN[topE] = Pagetop[Pagecount] ))
+			} ;;
+	(HOME)	# HOME - top of list.
+		(( Pagecount = 1 ))
+		(( IN[topE] = 1 ))
+		(( IN[currentE] = 1 )) ;;
+	(END)	# END - last visited page.
+		(( Pagecount = $#Pagetop )) 
+		(( IN[topE] = Pagetop[$#Pagetop] ))
+		(( IN[currentE] = IN[topE] )) ;;
+	(*) ERRLINE="$0:$LINENO" ;;
+	esac
+
+	# This happens when paging down:
+	IN[bottomE]=$(( IN[topE] + IN[hight] - 1 ))
+	# In case final page is not full:
+	[ "$IN[bottomE]" -gt "$IN[lastE]" ] && IN[bottomE]=$IN[lastE]
+	
+# nn_input(): SKIP BLANK LINES AND COMMENTS: ----------------------------------
+# If we are scrolling and the next line is either blank, or begins with a colon skip it.  Note in " $ c ,a zsh"  one can skip three lines at second comment.  This works when using arrow keys to return from search too.
+
+	local updn=
+	(( IN[currentE] > tmp )) && updn=DN
+	(( IN[currentE] < tmp )) && updn=UP
+	[[ "$updn" ]] &&
+	{
+		while [[ !   "${${(P)IN[list]}[$IN[currentE]]}" \
+				|| "${${${(P)IN[list]}[$IN[currentE]]}[1]}" = ':' ]]; do
+			[ "$updn" = 'UP' ] && (( IN[currentE] -= 1 ))
+			[ "$updn" = 'DN' ] && (( IN[currentE] += 1 ))
+			# If top line is ':' (a comment) change directions and move down again.
+			(( IN[currentE] < 1 )) 		   && updn=DN && continue
+			(( IN[currentE] > IN[lastE] )) && updn=UP && continue
+		done
+	} 
+
+	set -A "$1" ${(kv)IN} # Write to the named array (usually 'mmain').
+	
+	# Nothing has changed!
+	[ $IN[currentE] = $tmp ] && DRAW='IDLE'
+	INDEX="$IN[currentE]" # nnview needs this since it doesn't call nn_list.
+
+	return 0 # Otherwise we get an 'Illegal key' error in nn_list().
+} #END: nn_input().
+
+# =============================================================================
+# Capture keystroke or mouse action: One call each in nnview() and nn_list().  See: zcurses.txt.
+n_get_key ()
+{
+	MSG=  # New keystroke will erase old MSG.
+	NKEY=  # NB, must do this, or ^C goes strange when searching.
+	local key= keypad= mouse=()
+# zcurses mouse delay 0
+	zcurses timeout Status -1		# Essential!: wait indefinitely for input.
+	zcurses input Status key keypad mouse # Grab a key or mouse input.
+
+	# Get the regular key or the "keypad" key:
+	[ ! "$key" ] && key="$keypad"
+	[ ! "$key" ] && ERRLINE="$0:$LINENO" && return 1
+
+	# Convert mouse actions to equivalent keystroke.
+	if [ "$key" = 'MOUSE' ]; then 	# Set if mouse is clicked or scrolled.
+
+#${mouse[2]}	horizontal position (X).
+#${mouse[3]}	vertical position (Y).
+#${mouse[5]}	mouse clicks. 4th element is Z axis which is unused.
+# PRESSED = button down (slow click)
+# CLICKED = button release (fast click)
+# 1 = left button,
+# 3 = right button,
+# 4 = scroll up,
+# 5 = scroll down.
+
+		case "$mouse[5]" in
+			PRESSED4 ) NKEY='UP' ;;		# Scroll wheel UP.
+			PRESSED5 ) NKEY='DOWN' ;;	# ditto DOWN.
+			PRESSED1 ) ;& 				# ENTER. NB this is a slow click!
+			CLICKED1 ) NKEY='CLICKED'; click_flag=$mouse[3] ;; # mouse Y (vertical).
+		esac
+	else
+		NKEY=$key # Single good key, vis nemonic values above.
+	fi
+} # END: nn_get_key().
+
+# =============================================================================
+# Outputs a message at the bottom of the screen: Used in n_list() and nview(). 
+
+n_msg ()
+{
+	# Bold message if searching:
+	[ "$ACTION" = 'SEARCH' ] &&	zcurses attr Status +bold \
+							 || zcurses attr Status -bold
+	zcurses move Status 0 0
+	zcurses clear Status eol
+	zcurses string Status "$1"
+	zcurses refresh Status
+} #END: nn_msg().
+
+# =============================================================================
+# Add 'help': One call in nn_list() ca. line 285
+n_help ()
+{
+	integer Y=$(($LINES/2-20)) X=$((COLUMNS/2-30))
+	#		 Name, Ht, Wd, abs Y strt, abs X strt, Body col,    Border col.
+	n_window help  40  60  $Y          $X          white/black  red/green
+
+	typeset -a help_body=( $@ )
+
+	# Print each line:
+	for ((int=1; int<=$#help_body; int++)); do
+		zcurses move help $int 2 # NB these are RELATIVE to the window.  Illegal coordinates default to 1 and 1.
+		zcurses string help $help_body[$int]
+	done
+
+	zcurses refresh help
+} #End: nn_help()
+
+# =============================================================================
+# Universal window killer. Three calls.  Kills 'help' window without exiting and called by 'trap' and 'TRAPINT' on return.
+n_exit ()
+{
+	# Fix ' ^[[<0;24;4m ' bug? Must be 'mmain'!!
+	zcurses timeout Main 0 &> /dev/null 
+
+	# No argument = kill everything:
+	[ ! "$1" ] &&
+	{
+		for aa in $zcurses_windows; do
+			zcurses delwin $aa &> /dev/null
+		done
+	}
+	while [ "$1" ]; do # Kill named windows:
+		zcurses delwin $1 &> /dev/null
+		zcurses delwin $1B &> /dev/null
+		shift
+		[ "$1" = '!' ] && return # '!' = when quitting help screen we do not quit program.
+	done
+	# Or zcurses still owns the keyboard (try using scroll wheel).
+	zcurses end
+	# Some variables are needed after func quits!  SELECTED must exist or calling function has no idea what to do!
+	unset INDEX ERRLINE MSG ACTION DRAW SEARCHBUF # Can't delete: ZCURSES_xxx: read only arrays.
+} #END: nn_exit().
+

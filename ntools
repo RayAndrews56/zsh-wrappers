@@ -1,0 +1,185 @@
+#!/usr/bin/zsh
+
+# Tools based on nn_list():
+# 2022-11-12: renamed from znt-tools to ntools.
+
+# nalias ()
+# nenv ()
+# nfunctions ()
+# noptions ()
+# npanelize ()
+
+# =============================================================================
+# Browse and toggle shell's options. ENTER toggles but does not exit, because it restarts nn_list via REMEMBER_STATE:
+
+noptions ()
+{
+	[[ -o localoptions ]]   &&
+	{ unsetopt localoptions; _localopt="setopt localoptions" } || _localopt=
+
+	[[ -o kshoptionprint ]] ||
+	{ setopt kshoptionprint; _kshopt="unsetopt kshoptionprint" } || _kshopt=
+
+	local cumulative_msg=	# Stores the list of changes made.
+	local inlist=()			# Entire list of options.
+	typeset -aU outlist=()	# Filtered list.
+	local bareflag=			# Output to screen only.
+	[ "$1" = ',B' ] && bareflag=1 && shift
+	local msg1="$@" msg=
+	local initflag=1		# Special case.
+	local finalstring=()
+
+	while (( 1 )); do # nn_list reloads with refreshed list of options.
+	{
+		outlist=()
+		inlist=()
+		# Bart's power code: '(kv)options' will return two strings thus we have two '%s' to capture them.  First string is option padded to 20 spaces, then the value with 'off' colorized:
+		printf -v inlist "%-20s %s" ${(kv)options/#%off/${red}off${nrm}}
+#printf  "%-20s %s\n" ${(kv)options} > /dev/pts/2
+
+		# Don't forget to sort:
+		inlist=( ${(i)inlist} )
+
+		if [ "$1" ]; then
+			for aa in $@; do
+				outlist+=( "${(@Mi)inlist:#(#i)*$aa*}" )
+			done
+		else
+			outlist=( $inlist )
+		fi
+		[ -z "$outlist" ] && warningmsg "No matching options" && break
+		msg=":${cyn}Options matching any of: \"$msg1\"${nrm} ..."
+		finalstring=( "" $msg "" $outlist )
+
+		[ "$bareflag" ] &&
+		{
+			print -l  "${finalstring[@]}"
+			outputmsg "\n$#outlist items"
+			return 0
+		}
+
+		# Special case.  n_init at top of file creates stair-stepping output.  If we are using ',B' and want output to screen we must thus postpone initialization and we must only intialize once:
+		[ "$initflag" ] && { n_init; initflag= }
+
+		NFUNCTION='noptions'
+		n_list "${finalstring[@]}"
+
+		[ ! "$ACTION" ] && break
+		ACTION='LOOPING'
+
+		local option="${SELECTED%% *}"	# name.
+		local  state="${SELECTED##* }"	# value (on or off).
+
+		# Toggle the option:
+		[ "$state" = "on" ] \
+		&& { flag='off' && unsetopt "$option" 2> /dev/null || return }\
+		|| { flag='on'  && setopt   "$option" 2> /dev/null || return }
+		# Send msg for each individual change to the status line via '$MSG' ...
+		MSG="Setting \"$option\" to \"$flag\""
+		cumulative_msg+="$MSG\n"
+	}
+	done
+	# Print the accumulated changes only to terminal.
+	outputmsg "$cumulative_msg"
+
+	eval $_localopt
+	eval $_kshopt
+} #END: noptions().
+
+# =============================================================================
+# Choose an alias for editing with vared.
+nalias ()
+{
+	n_init
+
+	local list=( "${(@k)aliases}" ) # (k): Names from the aliases array, not values!
+	#'@'    split into words.
+	#'M'    deactivate 'm'. ? ... but it is needed.
+	#'i'    sort case-insensitively.
+	#':#'   match pattern following.
+	#'(#i)' match case-insensitively.
+	# '$1'  Narrow the search to the string '$1'.
+	list=( "${(@Mi)list:#(#i)*$1*}" )
+	# This works to colorize just this function:
+	#list=( "${list/$1/${red} $1 ${restore}}" )
+	[ -z "$list" ] && errormsg "No matching aliases" && return 1
+
+	n_list "$list[@]"  # Sort list case-insensitive.
+	[ "$SELECTED" ] || return 1
+	actionmsg "Editing \"$SELECTED\":"
+	vared aliases\[$SELECTED\]
+} #END: nalias().
+
+# =============================================================================
+# Choose an environment variable for editing with vared.
+nenv ()
+{
+	n_init
+	local list=( $(eenv) ) # Ray's 'eenv' command:
+
+	list=( "${(@M)list:#*$1*}" ) # It's already sorted.
+	[ -z "$list" ] && errormsg "No matching variables" && return 1
+
+	n_list "$list[@]"
+	[ "$SELECTED" ] || return 1
+
+	# Trim off space as well as equal sign now:
+	local selected="${SELECTED%% =*}" # Trim off equal sign and value.
+	actionmsg "Editing '$selected':"
+	vared "$selected"
+} #END: nenv().
+
+# =============================================================================
+# Choose a function for editing with vared.
+
+nfunctions ()
+{
+	n_init
+
+	local list=( "${(@k)functions}" ) # Function names only.
+	list=( "${(@Mi)list:#(#i)*$1*}" )
+	[ -z "$list" ] && errormsg "No matching functions" && return 1
+
+	n_list "$list[@]"
+	[ "$SELECTED" ] || return 1
+		actionmsg "Editing \`$SELECTED': (ENTER accepts changes)"
+		vared functions\[$SELECTED\]
+} #END: nfunctions().
+
+# =============================================================================
+# This function allows browsing output of an arbitrary command. It uses n_list() as usual, but input can use pipes as well as a normal command tail.  Examples:
+
+# " npanelize ls /usr/local/bin "
+# " ls /usr/local/bin | npanelize zsh " which in effect greps the output of the	'ls' command for the string: "zsh".
+# " npanelize print -l $(ls n* | grep ',9') "
+# 2022-11-24: Can't 'npanelize l ,B' get 'command not found', however we can execute '$ l ,B' and then: 'npanelize print -rl $_execute_output'.
+
+npanelize ()
+{
+	local IFS=$'\n' # Still need this.
+
+	n_init "$1"
+
+	if [ -t 0 ]; then # Not using redirection:
+		[ "$#" -lt 1 ]\
+			&& advicemsg "Usage: npanelize {command} [option|argument] ... or command | npanelize"\
+			&& return 1
+
+		SEARCHBUF=	# Special case, can't search when command is to the right of npanelize (i.e. not redirection).
+
+		local list=( $( "$@" ) )
+	else # Using redirection:
+		# Check if we can reattach to terminal.  When does this happen??
+		[ ! -c /dev/tty ] && errormsg "No terminal available (no /dev/tty)" && return 1
+
+		list=( "${(@f)"$(<&0)"}" ) # Grab output from pipe.
+		exec </dev/tty  	   # Interesting! Else 'improper input detected'.  Why??
+	fi
+
+	[ -z "$list" ] && warningmsg "Nothing found."  && return 1
+	n_list "$list[@]"
+	[ "$SELECTED" ] || return 1
+
+	print -zr "$SELECTED" 	# Print to command line.
+} #END: npanelize().
+

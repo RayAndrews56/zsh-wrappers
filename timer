@@ -1,0 +1,122 @@
+#!/usr/bin/zsh
+
+# Is this function much use since we can do:
+# $ time (repeat nnn some-command) ?? However both methods show about the same results.
+
+# 2022-09-16:  Move 'stop' above normal run.  Error check now if not properly stopped.
+
+function timer ()
+{
+	[[ "$1" = '-h' || "$1" = '-s' ]] && echo -e "
+timer() is a timer that corrects for its own runtime.
+
+Synstax: ${red}
+timer start [CORRECTION] null
+timer start [CORRECTION] [message]
+timer [message]
+timer stop [message]
+${nrm}
+We must run 'timer start ...' before using this function to reset all the
+internal variables and to calibrate the run time correction.
+
+To calibrate:
+
+$red $ timer start [CORRECTION]; timer; timer; timer; timer stop $nrm
+... Adjust CORRECTION to a higher number if 'Cumulative=xxx' is positive and
+adjust it to a lower number if it is negative. Try to get close to zero.
+The default is 2 miliseconds.
+
+Command line example:
+
+$ timer start hello world; echo foo; echo bar; timer stop
+
+${mag}Starting timer, Correction is: 2 miliseconds ${red}hello world ${nrm}
+foo
+bar
+
+${grn}Elapsed=-1 (0:00), Cumulative=-1 (0:00) ${nrm}
+
+${mag}Stopping timer, Real Runtime: 1 miliseconds (0:00) ${nrm}
+
+---------------------------
+
+'Real Runtime'  is the literal, uncorrected runtime -- the difference between
+                the clock time at 'start' and the clock time at 'stop'.
+'Correction'    is the number of miliseconds used for the internal correction.
+'Elapsed'       is the corrected elapsed time since the last call to 'timer'.
+'Cumulative'    is the corrected total elapsed time.
+
+Or we put 'timer' calls right inside a function.
+
+$red $ timer start [CORRECTION] null $nrm
+... Start timer with no messages.
+
+Note, the sum of all 'Elapsed' can vary a tiny bit from 'Cumulative' due to
+rounding errors.  The first call can give a negative number since all values
+are calculated before being printed, which is infact the greatest time lag.
+(I've tried to correct for this with an initial time for 'timer_previous' and
+'timer_start' that subtracts 'correction'.)
+" && return
+
+# -----------------------------------------------------------------------------
+# Start:
+
+	if [ "$1" = "start" ]; then
+
+		integer -gH timer_active=1
+		integer -gH timer_start="$(( $(date +%s%N)/1000000 ))" # Start a new timer run (actual clock time).
+		integer -gH timer_previous="$timer_start" # Remember the previous time (to be subtracted, to get 'elapsed').
+		integer -gH timer_correction=2 # Number of miliseconds to decrement so as to correct for the time it takes to run this fce itself.
+		# integer -xZ 6 cumulative=0	# -Z: leading zeros for padding.
+		integer -gH timer_cumulative=0	# No left padding with zeros.  The accumulated corrected total run time.
+
+		shift
+		# Smart argument: if a number set correction, otherwise it's a comment:
+		[[ "$1" = <-> ]] && timer_correction="$1" && shift
+
+		# Supress 'Starting' message with '$ timer start null':
+		[ "$1" = 'null' ] && return
+		actionmsg "\nStarting timer, Correction = $timer_correction miliseconds ${red} $@"
+		return
+	fi
+
+	# Make sure to 'turn off' timer.  Error check now if not properly started.
+	[[ $timer_active != 1 ]] && errormsg " 'timer' not properly started." && return
+
+# -----------------------------------------------------------------------------
+# Normal display: (including when 'stop' is used):
+
+	# Current time in seconds and nanoseconds >> miliseconds.
+	# now:		the real time right now. Used to calculate 'elapsed'.
+	# elapsed:	the corrected elapsed time since last call to 'timer'.
+	integer now="$(( $(date +%s%N)/1000000 ))" # As in 'start'.
+	integer elapsed="$(( now - timer_previous - timer_correction ))" # Corrected elapsed time.
+	timer_cumulative="$(( timer_cumulative + elapsed ))" # Corrected cumulative time.
+	timer_previous="$now" # Update pprevious for next call:
+
+	# Hack to remove 'stop' from msg:
+	local vv=( $@ )
+	[[ ${vv[1]} == 'stop' ]] && vv=$@[2,-1]
+	
+		# 'echo' saves only a 1/4 milisecond over 'infomsg'.
+		# Elapsed in miliseconds, Elapsed in (minutes:seconds), ditto for Cumulative:
+		infomsg "\nElapsed: $elapsed ms \
+($(( $elapsed/60000  )):${(l:2::0:)$(( $elapsed/1000%60 ))}), \
+Cumulative: $timer_cumulative ms \
+($(( $timer_cumulative/60000 )):${(l:2::0:)$(( $timer_cumulative/1000%60 ))}) \
+${red} $vv" # Comments accepted.
+
+# -----------------------------------------------------------------------------
+# Stop:
+
+	if [ "$1" = "stop" ]; then
+		timer_active=0 # timer can't be run unless properly initialized.
+		shift
+		# For " (0:00) " minutes and seconds display:
+		integer base=$(( (now - timer_start)/1000 ))
+		# Note code for padding the seconds:
+		actionmsg "\nStopping timer, Real Runtime: $(( now - timer_start )) miliseconds ($(( $base/60 )):${(l:2::0:)$(( $base%60 ))})" # ${red} $@" # Message is duplicated but so what.
+		return
+	fi
+}
+

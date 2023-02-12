@@ -1,0 +1,116 @@
+#!/usr/bin/zsh
+
+# aa-messagefunctions: for very small functions that set colors in messages.
+# To turn on tracing, which shows both the calling file and the literal line, type: " $ enable_lines=1 ".  To kill most messages set '$ disable_msg=1'.  Note neither of these flags have any effect within nn_list().  Comments at bottom. 
+
+# Long versions: --------------------------------------------------------------
+
+    red=$'\e[31;1m'
+  green=$'\e[32;1m'
+ yellow=$'\e[33;1m'
+   blue=$'\e[34;1m'
+magenta=$'\e[35;1m'
+   cyan=$'\e[36;1m'
+
+  reset=$'\e[0m'
+ normal=$'\e[0m'
+
+# Short versions: -------------------------------------------------------------------------------
+
+    red=$'\e[31;1m'
+    grn=$'\e[32;1m'
+    yel=$'\e[33;1m'
+    blu=$'\e[34;1m'
+    mag=$'\e[35;1m'
+    cyn=$'\e[36;1m'
+
+    nrm=$'\e[0m'
+
+# Plain messages long and short: ----------------------------------------------
+
+redline ()     { echo -e "$red$@$nrm" }
+greenline ()   { echo -e "$grn$@$nrm" }
+yellowline ()  { echo -e "$yel$@$nrm" }
+blueline ()    { echo -e "$blu$@$nrm" }
+magentaline () { echo -e "$mag$@$nrm" }
+cyanline ()    { echo -e "$cyn$@$nrm" }
+
+redline () { echo -e "$red$@$nrm" }
+grnline () { echo -e "$grn$@$nrm" }
+yelline () { echo -e "$yel$@$nrm" }
+bluline () { echo -e "$blu$@$nrm" }
+magline () { echo -e "$mag$@$nrm" }
+cynline () { echo -e "$cyn$@$nrm" }
+
+alias lineno='magentaline function: ($0), logical line: \($LINENO\) file: ${(%):-\(%x\) physical line: \(%I\)}'
+
+# These messages are now in the order they are likely to occur from fatal errors to advice on what to do next:
+
+# error: Fatal error, program can't proceed.
+
+# warning: Soft errors: 'no files found', a nul result more than a hard error. Blends to hard error.
+
+# info: Explain the output: "list of all files by modification date: ..." Green = 'safe' or 'ok' or 'done'.  Help screens too.
+
+# action: Explain some action that is being taken, nice when the progam takes a long time. "User break" ... some action just taken.
+
+# Could we have helpmsg? Or would that intersect advicemsg?
+
+# input: "please hit any key ..." request action
+# "  Invalid selection, try again ..." input or warning?
+
+# advice: Hardly used. "To see more information ..." or "Usage: ...".  Suggest action, most passive, so try blue.
+
+# output: Poor: the output itself. output should probably remain white, unless it's been modified by a function. Cyan? Green?
+# eg: outputmsg "LISTING:${nrm} `ls -l $1`" | GREP "$1"
+
+# Note: funcfiletrace is a zsh created array:
+### 2023-01-17: Alias simplifies things:
+  alias _ENABLE='(( $enable_lines )) && echo -n "${funcfiletrace[1]}: "' 
+
+  # errormsg is immune to disabling:
+  errormsg () { _ENABLE ; redline "\nERROR:$*" }
+
+ # output and input are immune to disabling:
+ outputmsg () { _ENABLE ; cynline "$*" }
+  inputmsg () { _ENABLE ; yelline "$*" }
+
+warningmsg () { _ENABLE ; [ "$disable_msg" ] || bluline "$*" }
+ advicemsg () { _ENABLE ; [ "$disable_msg" ] || bluline "$*" }
+ actionmsg () { _ENABLE ; [ "$disable_msg" ] || magline "$*" }
+   infomsg () { _ENABLE ; [ "$disable_msg" ] || grnline "$*" }
+
+return
+
+# echo -e "\e[45;1;32mhowdy"
+# 45=background color, 1='attribute' (bold, underlined, etc), 32=forground color.
+
+# echo -e "\e[41;3;31mhowdy"  << invisible!  red on red.
+# Note, the order doesn't seem to matter, only the values:
+# \e[32;4;1;41m
+# ... gives us bold, underlined yellow text on a red background.
+
+# good info here:
+# http://ascii-table.com/ansi-escape-sequences.php
+
+#Text attributes
+#0	All attributes off
+#1	Bold on
+#4	Underscore
+#5	Blink on   ( doesn't work here)
+#7	Reverse video on
+#8	Concealed on
+
+# Dull messages used mostly here: ---------------------------------------------
+
+#    Dred=$'\e[31m'
+#    Dgrn=$'\e[32m'
+#    Dyel=$'\e[33m'
+#    Dmag=$'\e[35m'
+#    Dcyn=$'\e[36m'
+#Dredline () { echo -e "$Dred$@$nrm" }
+#Dgrnline () { echo -e "$Dgrn$@$nrm" }
+#Dyelline () { echo -e "$Dyel$@$nrm" }
+#Dmagline () { echo -e "$Dmag$@$nrm" }
+#Dcynline () { echo -e "$Dcyn$@$nrm" }
+

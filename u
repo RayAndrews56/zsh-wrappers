@@ -1,0 +1,99 @@
+#!/usr/bin/zsh
+
+# This is a universal unzip/untar/un-whatever utility.
+
+function u ()
+{
+	# Force '-s' if no arguments
+	[ -z "$1" ] && _u-syntax && return 0
+	[ ${1:0:1} = '-' ] && dash_switch u $1 && return $?
+
+	local to_history=
+	local eextract="x"	# Default is 'extract' vs. 'list'.
+	local program=		# 'tar' or 'unzip' etc.
+	local method=		# Switches to whatever 'unzip' program.
+	local string=		# Display string.
+	local info=			# Display method ('list' or 'extract').
+
+	if [[ ${1:0:1} = ',' ]]; then
+		for ((i=1; i < ${#1}; i++)); do
+			case ${1:$i:1} in
+			H ) to_history='yes' ;;
+			l ) eextract=	 ;; # list.
+			e ) eextract="x" ;; # extract (default).
+			* ) errormsg "No such switch >,${1:$i:1}<"; return 1 ;;
+			esac
+		done
+		shift
+	fi
+
+	[ -z "$1" ] && errormsg "No file to extract" && return 1
+
+	# Modern tar recognizes the compression format by itself!
+	# tar xf archive.tar.xz = extract
+	# tar tf archive.tar.gz = list
+	# Note, '.tar.gz' is properly handled by 'tar' (untarred and unzipped automatically. 'gzip' will just expand  it to a '.tar' file but won't unpack the tar file.
+
+	# Aproximate match: if '.tar' is within the filename anywhere:
+	if   [[ $1 =~ ".tar" ]];		then program="tar"
+	elif [[ $1 =~ ".tgz" ]];		then program="tar"
+	elif [[ ${1: -3} == ".xz"  ]];  then program="xz"
+	elif [[ ${1: -3} == ".gz"  ]];  then program="gzip"
+	elif [[ ${1: -4} == ".bz2" ]];  then program="bzip2"
+	elif [[ ${1: -4} == ".zip" ]];  then program="unzip"
+	else errormsg "Unknown file type"; return 1
+	fi
+
+	if [ $eextract = "x" ]; then
+		info='extracting'
+		method="-vdf" # default.
+		[ $program = "unzip" ] && method="-o"
+		# 'x' with 'tar', 'd' with everything else for 'extract'.
+		# Note: order of switches is VITAL! 'tar -tfv' is OK, 'tar -fvt' is BAD.
+		[ $program = "tar" ] && method="-vxf"
+	else # list files, don't extract:
+		info='listing'
+		# Ok if 'tar', but what about others?
+		[ "$program" = "unzip" ] && method="-l" || method="-tf" # NB must force 'f'.
+	fi
+
+	string="$program $method $1"
+	actionmsg "\nExecuting ($info): $string"
+	_execute $string
+}
+
+function _u-syntax ()
+{
+echo -e "
+$_common_syntax
+u ,{le} <FILESPEC>
+
+,l:  List files in archive as opposed to extracting.
+,e:  Extract files in archive (default).
+
+FILESPEC:  The file to be untared.
+"
+}
+
+function _u-usage ()
+{
+echo -e "
+${grn}USAGE: $nrm
+
+'u' is a wrapper around 'tar', 'xz', 'gzip' and 'bzip2'.
+
+'u' will decompress and/or untar any file who's extension(s) indicate that it is an archive. The correct decompression is automatically used, based on the final extension. It automaticaly forces overwrite and shows verbose output. Supported formats:
+.tar .tgz .xz .gz .bz2 and not quite .zip.
+
+If there is nothing following 'u' syntax help will be shown.
+
+EXAMPLES:
+
+$red u somepackage.tar.gz $nrm
+Expand >somepackage.tar.gz< overwriting existing files.
+
+$red u ,l somefile.bz2 $nrm
+List the contents of \"somefile.bz2\".
+"
+_u-syntax
+}

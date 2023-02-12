@@ -1,0 +1,207 @@
+#!/usr/bin/zsh
+
+: <<'COMMENTBLOCK'
+
+varis: Pass a string, which is the name of a variable, and show value:
+
+2022-12-17: Auto add random number to any comment:
+
+2022-12-04: Huge rework.  Terminal # is now a switch, eg: ',2'.  ',r' forces RAW mode. Streamlined code and '$varis_switches' preloads switches.
+
+alias varis='_varis "${0}():$LINENO in: ${(%):-%x:%I} >"'
+#                     1--   2------     3------4- 5-
+# 1: name of function, 2: parsed line 3: prefix for both: 4: file name, 5: physical line.
+
+COMMENTBLOCK
+
+alias varis='_varis "${0}():$LINENO in: ${(%):-%x:%I} >"'
+
+# Global variable stores prefered switches but can be overridden on CLI.
+varis_switches=
+_varis ()
+{
+	# NB $2 here.  $1 is args supplied by alias which we grab below.
+	[[ "$2" = '-h' || "$2" = '-s' ]] && varis_help && return 0
+
+# Grab all inputs: ------------------------------------------------------------
+
+	local file_data="$1"	# Alias supplies function, filename and line numbers.
+	local mmultiline=		# Flag ,m: multiline output requested:
+	local eexpanded=() 		# Variable expanded, either by zsh if '$' is used or by 'eval' below if only the name of the variable is passed.
+	local ccomment=			# Comment string if any.
+	local line_string=		# Everything printed before the expanded variable.
+	local sspacer=			# Flag: ,s: print spacer.
+	local ppause= 			# Flag: ,p: pauses before output.
+	local tterminal="/dev/tty" # default output is the current terminal.
+	local raw=				# ',r' flag forces RAW mode.
+	local prnstr=			# Holds printer string.
+	local a=	# Counter.
+	local ii=	# ditto.
+	shift # $file_data has been grabbed above as $1.  First typed arg is $2 so shift.  Next arg can be switches or '! or the variable to expand.
+
+	# Cool use of variable to preset switches. We loop twice, first looking to the variable 'varis_switches' for switches, then to CLI, which will override the former.  Input can be from both sources or one or neither.
+	for ((a=2; a>0; a--)); do 
+		[ $a -eq 2 ] && switches="$varis_switches" 	# First pass reads variable.
+		[ $a -eq 1 ] && switches="$1"				# Second pass reads CLI.
+	
+		# No input at all, OR no VALID switches:
+		[[ -z "$switches" || ${switches:0:1} != ',' ]] && continue 
+	
+		for ((ii=1; ii < $#switches; ii++)); do
+		case ${switches:$ii:1} in
+				o ) mmultiline=''  ;;
+				m ) mmultiline=1 ;; 
+				s ) sspacer=1  ;;
+				p ) ppause=1 ;;
+				r ) raw=1  ;;
+			  <-> ) tterminal="/dev/pts/${switches:$ii:1}" ;;
+				* ) errormsg "No such switch >,${switches:$ii:1}<"; return 1 ;;
+		esac
+		done
+		[ "$switches" = "$1" ] && shift # There were valid CLI switches.
+	done
+
+	if [[ "$1" && "$1" != '!' ]]; then # We have a variable.
+		# First try to add dollar sign and expand:
+		# This grammar makes line splitting of arrays possible:
+		[ ! "$raw" ] && eval "eexpanded=( "\${$1}" )" 2> /dev/null 
+# print -l " expanded: $eexpanded"
+		# If we can't expand, the variable is already expanded.  We don't know the name of it anymore so call it RAW:
+		[ "$eexpanded" ] && line_string=" \"\$${1}\" is:" \
+						 || { eexpanded=( "$1" ); line_string=" RAW:" }
+	fi
+
+	# Everything else is comment:
+	[ "$2" ] && shift && ccomment="${cyn}${(f)@}${grn} - $RANDOM${nrm}"
+
+# Display the output: ---------------------------------------------------------
+
+	[ "$sspacer" ] &&
+		print "\n==========================================" >> $tterminal
+
+	# No built in spaces in case line_string is empty, avoid pointless spaces.
+	prnstr="${red}$file_data${grn}$line_string${nrm}"
+
+	# There's no output so print on single line:
+	[ ! "$line_string" ] && mmultiline=
+	if [ "$mmultiline" ]; then
+		# NB need to break this up into separate 'words' with quotes:
+		print -l "$prnstr\n"$eexpanded"\n$ccomment" >> $tterminal # Multi line.
+	else
+		print    "$prnstr \|$eexpanded\| $ccomment" >> $tterminal # Single line.
+	fi
+	# Pause AFTER display.
+	[ "$ppause" ] && inputmsg "Press any key ..." && read -qs
+}
+
+varis2file ()
+{
+	eval eexpanded="\${$1}"; echo "\$$1 is: \"$eexpanded\" $@[2,-1]" >>! varis2file
+}
+
+varis_help ()
+{
+# SYNTAX and HELP combined:
+		echo "
+$red varis ,rpos# VARIABLE [\"COMMENT\"]$nrm
+
+,r:  Force RAW output, normally only used with positional paramaters. **
+,p:  Pause after each output.
+,o:  Print data as one long line (default).
+,m:  Print data one line per field.  Good for arrays.
+,s:  Print a spacer: ========================== ... before the output is printed.
+,#:  A single digit: The output terminal.
+
+varis: Calls to this function placed in another function or script will output the name of the enclosing function, the parsed line, the name of the file and the physical line location of the call to varis as well as the name and the expanded value of any variable given as a first argument. Following arguments are added as comments.  The output can be redirected to another terminal.
+
+Example:
+We have a variable 'var' in the function 'test' in the file 'test-file'.  Add a varis line somewhere in the function:
+
+$red varis ,3 var \"'var' is my variable \"$nrm
+
+When 'test' is run varis will produce this output: (redirected to terminal #3):
+${red}test():6 in: test:17 > ${grn}\"\$var\" is: ${nrm}|value-of-var| ${cyn}'var' is my variable $nrm
+
+Output is: 
+
+in red:
+1) name of function or script (followed by '():')
+4) parsed line of the call to 'varis'
+2) ' in: '  then the name of the file
+3) ':' then the physical line of the call to 'varis' then ' > '
+5) in green: name of the variable in quotes then ' is: '
+6) in white: value of the variable (or colored if the variable contains color codes).
+7) in cyan: an optional message.
+
+,o:  The variable will be enclosed in '|' characters and printed as one line of output, otherwise the variable will be printed on multiple lines IF it is an array.
+
+,s: Print a spacer, this is good for separating blocks of output.
+
+,p: Pause (hit a key) after output.
+
+,r: Force 'RAW' output: don't attempt to expand the argument.**
+
+We normally pass the variable name without the '$', this is the only way to capture both the name of the variable and show its value too.  However, if the dollar sign is used in front of VARIABLE this gives us RAW output -- the name of the variable is lost due to its being expanded by zsh just prior to varis being called and what is shown by varis is the expanded value of that variable.  Using the dollar sign is normaly only used for the positional parameters: '\$1' etc and it's best to quote the variable if it is likely to have spaces or newlines in it's expanded value so that varis knows to treat it as a single output argument, not get it confused with a comment.
+
+Note: you can work around the loss of the variable name with code like this:
+$red
+local arg1=\"\$1\"
+varis arg1 $nrm
+... 'varis' will now report the name of the variable as usual.  Or you can do this:
+$red varis \"\$1\" \"arg1\"$nrm
+... the comment 'arg1' lets you know that it was '\$1' being expanded.
+( Note: 'varis 1' is meaningless.  Unlike an ordinary variable, '\$1' only exists within the calling function, varis has no way of knowing what its value is/was.) **
+
+Examples:
+
+$red varis ,o var $nrm
+... output tries to stay on one line, this is useful if you will have many calls to varis and find them scrolling off the screen or want the data more in columns than in rows.  Also the '|' characters before and after the data can be useful for detecting leading or trailing spaces in the data.
+
+$red varis ,2sp VARIABLE 'some comment' $nrm
+... a spacer will be printed before the output, and you'll have to hit a key to continue.  Output will be to terminal #2.
+
+$red varis \"\$1\" \"COMMENT\"$nrm
+... output will be RAW, and because of the double quotes, COMMENT might itself include some variable which will be properly expanded.
+
+$red varis ,2 ! some long comment$nrm
+... The bang indicates 'no variable' so we print just line numbers and the comment to terminal #2
+
+$red varis $nrm
+... just the line numbers.  There's no comment, so no '!' is needed.
+
+The variable can be a subscripted array element which MUST be quoted:
+$red varis \"array[n]\" $nrm
+... that's because when zsh sees '[xx]' it tries to exand it to a list of files and quoting stops that from happening. 
+
+If set, the variable '\$varis_switches' 'preloads' whatever switches are desired:
+$red $ varis_switches=',o2sp' $nrm 
+
+Don't try adding any sort of punctuation to a comment unless it is single quoted otherwise 'eval' will find reason to take these as various commands.
+
+Note that if varis is being called from a script, physical and parsed line numbers will be the same since zsh does not 'clean up' or pre-parse scripts before running them, however functions are pre-parsed, so the physical line is almost always greater than the parsed line since in the later all comments and blank lines are removed.
+
+The parsed line is useful in case zsh throws an error within a function which will always be flagged to the parsed line.  Knowing both the physical and the parsed line numbers helps locate the error -- by simply putting a call to varis in the function and noting the parsed line vs. the parsed line of the error, we can thus 'home in' on the error.
+
+** 
+Try this:
+$ test1 ()
+{
+  var=2
+  varis \$var 'pard'
+}
+$ test1 howdy
+test1():3 in: test1:6 > "$2" is: |pard| pard
+
+... the raw value of '$var' is '2' which varis attaches a dollar sign to, creating '\$2' which expands to the second arg to varis ITSELF which is 'pard', not what we want.  Use the ,r switch to force RAW output.  Same function but with 'varis ,r \$ var 'pard'':
+test1():3 in: :127 > RAW is: |2| pard
+... somewhat better.  Again you'd normally only do this with the positional paramaters.
+
+If you need to do this:
+varis "@"
+... do this instead:
+var="$@"
+varis "var"
+... otherwise when '@' is expanded we get $2 being taken as a comment.
+
+"
+}

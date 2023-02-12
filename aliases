@@ -1,0 +1,107 @@
+#!/usr/bin/zsh
+
+alias nx='n_exit'
+alias tc='trycompare $@'	# And in 'try' too.
+alias chess='xboard -ics -icshost freechess.org'
+alias beep='echo -e "\a" > /dev/tty1'
+# Pipe to this alias to strip colors:
+alias stripcolors='sed "s/\x1B\[\([0-9]\{1,2\}\(;[0-9]\{1,2\}\)\?\)\?[mGK]//g"'
+
+# Aliases and a few global variables:
+
+# Suffix aliases: ==============================================================
+
+#alias -s html=$BROWSER
+#alias -s org=$BROWSER
+#alias -s php=$BROWSER
+#alias -s com=$BROWSER
+#alias -s net=$BROWSER
+
+alias -s 3GP='mplayer'
+alias -s 3gp='mplayer'
+alias -s AVI='mplayer'
+alias -s avi='mplayer'
+alias -s docx='abiword'
+alias -s DOCX='abiword'
+alias -s FLV='mplayer'
+alias -s flv='mplayer'
+alias -s PNG='atril'
+alias -s png='atril'
+alias -s PPS='libreoffice'
+alias -s pps='libreoffice'
+alias -s GIF='atril'
+alias -s gif='atril'
+alias -s JPG='atril'
+alias -s jpg='atril'
+alias -s JPEG='atril'
+alias -s jpeg='atril'
+alias -s MOV='mplayer'
+alias -s mov='mplayer'
+alias -s mp3='mplayer'
+alias -s mp4='mplayer'
+alias -s MPG='mplayer'
+alias -s mpg='mplayer'
+alias -s PDF='evince'
+alias -s pdf='evince'
+alias -s PSD='abiword'
+alias -s RTF='abiword'
+alias -s rtf='abiword'
+alias -s TXT='geany'
+alias -s txt='geany'
+alias -s WMV='mplayer'
+alias -s wmv='mplayer'
+alias -s XCF='gimp'
+alias -s xcf='gimp'
+
+
+# Favorite directories: ========================================================
+
+T='/aWorking/Text'
+Z='/aWorking/Zsh'
+B='/aWorking/Zsh/Boot'
+S='/aWorking/Zsh/Source'
+Y='/aWorking/Zsh/System'
+R='/aRay'
+M='/aMisc'
+W='/aWorking/Zsh/Source/Wk'
+A='/aArchive'
+N='/aRay/Notes'
+
+alias T="cd $T"
+alias Z="cd $Z"
+alias B="cd $B"
+alias S="cd $S"
+alias Y="cd $Y"
+alias R="cd $R"
+alias M="cd $M"
+alias W="cd $W"
+alias A="cd $A"
+alias N="cd $N"
+
+# Misc aliases: ================================================================
+
+# To call a script without needing the dot:
+# alias zmv='function {. zmv }'
+
+alias en='e ./notes.txt &' # Local notes
+alias ez='e /aWorking/Text/znotes.txt &'
+alias ed='e /aWorking/Text/debian.txt &'
+alias es='e /aWorking/Text/sed.txt &'
+alias el='e /aWorking/Text/linux.txt &'
+alias mem="free -m"
+alias size="du -hsx"
+
+alias dat="advicemsg Wait ...; ntpdate -u pool.ntp.org >/dev/null; date +%F--%T"
+# Don't add 'wait' msg because output needs to be captured by 'junk' (at least).
+#alias dat="ntpdate -u pool.ntp.org >/dev/null; date +%F--%T"
+
+alias sink='rsync -vaxX --delete-before'
+
+alias alldisks='lsblk -o  label,fstype,name,mountpoint,size,fsavail,fsused,fsuse%,model'
+# Preserve timestamps, Verbose, Update (don't copy over newer file):
+alias up='command cp -pvu'
+alias cp='command cp -vp'
+
+# Pipe into this: ... | HEX
+alias HEX='od -tx1z -An'
+

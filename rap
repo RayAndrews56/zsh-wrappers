@@ -1,0 +1,635 @@
+#!/usr/bin/zsh
+
+: <<'COMMENTBLOCK'
+
+'rap' is a wrapper around dpkg, apt-cache, apt-get, apt-file and aptitude.
+
+2022-11-15: Back to execute: 'before_filtering' variable removed.
+			IFS comment out, seems ok.
+
+2022-10-16: Second search is pointless if first search returns nothing:
+
+2022-10-11: "ccolorize NoPrint" retains usefulness of 'colorize' but leaves linecount and pringing to calling function where 'rap ,b' and 'rap ,s' will be fitering the output and handling linecount.
+
+Better sedding.
+
+2022-10-10: Improved messages for 'rap ,f'.
+
+2022-10-6: BUG: spaces in string below ruined 'grep' search!  This goes way back. 
+
+2022-10-06: Rework of line count: Can't use the normal mechanism in case of a brief search which cuts down the number of lines.  Also, the count wasn't working anyway due to the redirection of the calls to colorize.
+
+2022-10-04: BUG, from way back, output needs to be split on LINES! or 
+# " dpkg-query -s "$var" &> /dev/null && infomsg $var " line (ca. line 315 below) will receive single chars as arguments!
+
+2022-09-28: We want to count lines AFTER filtering.  Convert count of caracters to count of lines:
+
+2022-09-28: This duplicates functionality of '_execute':
+Note how 'exec' solves the problem of protecting the single quotes in aptitude searches.
+
+2022-02-08: "rap LibreOffice_7.3.0_Linux_x86-64_deb.tar.gz" fails but that's probably good because "dpkg -i LibreOffice_7.3.0_Linux_x86-64_deb.tar.gz" fails too.  Must first unpack the archive and then: "dpkg -i *.deb".
+
+USEFULL:
+https://www.debian.org/doc/manuals/aptitude/ch02s04s05.en.html#tableSearchTermQuickGuide
+
+------------------
+'apt-cache show' was not distinguishing installed from uninstalled!! replace with 'aptitude search'.
+
+" dpkg -S $1 $ggrep_oneline $1 " replaced with
+" apt-file search $ccase $1 $ggrep_oneline $1 "
+... the latter needs 'install' testing (see ' ,f') but is case sensitive and doesn't have the leading slash problem that dpkg does.
+
+$ aptitude show '?name(grep)'   This is WILD.
+$ aptitude show '?name(^grep$)'	This is EXACT.
+$ aptitude show grep  			This is EXACT.
+$ aptitude search grep			This is WILD.
+
+aptitude is better!  It uses width of screen intelligently, has better organization of information and can filter for installed packages.  BUT APTITUDE IS ALWAYS CASE INSENSITIVE unless only a single package is shown, whereas apt-cache is sensitive UNLESS wildcards are used.  apt-cache wildcards: " apt-cache show '*string*' ".
+
+aptitude show '~i ?name(grep)' : Only installed packages, autogrep 'grep'.  This is INsensitive.
+aptitude show ~i '?name(grep)' : All installed packages AND autogrep 'grep' (which is redundant and never wanted).
+aptitude show '~i ?name(^grep$)' : Just package 'grep' if it's installed. This is INsensitive.
+aptitude show grep : Just package 'grep' (no autowild in this case). Don't attempt wildcards. This IS case sensitive.
+
+replace dpkg with apt-cache since the latter is case sensitive.
+
+Convert to 'apt-get' for 'install', 'purge' and 'reinstall'.  'aptitude' method would tell you that something was already installed, but if trying to reinstall, it would report that it was not installed.
+
+THOTS:
+- Have I ever searched for more than one package at a time?
+- Are packages ever uppercase?
+- Should ',a' (show all info) switch ever be wild?
+- ,x is not case so much as EXACT.
+
+- NB don't try to cut out coloring hoping to rely on piping to 'g' or grep since the output will be reformated unpleasantly.
+
+COMMENTBLOCK
+
+# Every SEARCH or SHOW variation of rap is run through this function for filtering and highlighting via grep. $1 is a package name, a filename, or a search string and the rest of the argument is the command who's output is to be colorized (highlighted).  $1 is always highlighted red (01;35).  The output will also be searched for $ggrep_string if it exists (that is, if the ,c or ,h switches are used (they are stored in the flag '$ggrep' and STRING is stored in $ggrep_string) eg: " rap ,sh STRING PACKAGE ").  STRING will be highlighted magenta (01;31). If '$ggrep=filter' is set, then nonmatching lines are removed. If '$ggrep=highlight', then nonmatching lines remain.
+function ccolorize ()
+{
+
+	local no_print=
+	[[ "$1" == "NoPrint" ]] && shift && no_print=1
+
+	local string=$1 # Search string.
+	shift # Must do this to strip search string off search target!
+
+	actionmsg "Running: $*\n"
+
+	_execute ,s $*
+	[ -z "$_execute_output" ] && { warningmsg "(No matches)"; return 1 }
+
+	if [ "$ggrep" = 'filter' ]; then
+	# 2022-10-6: BUG: spaces in string below ruined 'grep' search!  This goes way back.		 
+		 top_filter="$ggrep_string" # Purge non matching lines and colorize.
+	else top_filter="^|$ggrep_string" # Colorize without purging.
+	fi
+
+	# _execute_output is only used again by " dpkg-query -s "$var" "(ca. line 324 below).
+	after_filtering=$( print -l $_execute_output\
+	| GREP_COLOR='01;35' egrep $ccase --color=always "$top_filter"\
+	| GREP_COLOR='01;31' egrep $ccase --color=always "^|$string" )
+
+	[ $no_print ] && return 0
+
+	# MAIN OUTPUT:
+	print -l $after_filtering
+	# Need this line to keep linecount accurate:
+	after_filtering=( ${(f)after_filtering} )
+	# NB this is a cumulative count in case of multiple search. 
+	line_count=$(( $#after_filtering + line_count ))
+} # END: colorize()
+
+# =============================================================================
+# Test for status of package. Very tricky to get maximum information! Note dpkg-query is insensitive but aptitude is sensitive.  No wildcards here.
+function _rap_test_install ()
+{
+	local mmsg=vvar=''
+	_rv=0
+	# 'aptitude why' has no string to indicate 'not installed' so we use 'dpkg-query' first then 'apitude why' for more details:
+	dpkg-query -s "$1" &> /dev/null &&\
+		mmsg="is installed." || { mmsg="is NOT installed." && _rv=1 }
+
+	vvar=$( aptitude why "$1" 2>&1 ) # 'No package named' msg goes to stderr!
+
+echo $vvar | grep -q "Not currently installed" &&	mmsg="is NOT installed." && _rv=1
+echo $vvar | grep -q "Manually installed," && mmsg="was manually installed." && _rv=1
+echo $vvar | grep -q "No package named" &&	mmsg="does not exist or is not installable as is." && _rv=2
+
+	infomsg "\nPackage: \"$1\" $mmsg"
+}
+
+# =============================================================================
+function rap ()
+{
+	[ -z "$1" ] && _rap-syntax && return 0
+	[[ ${1:0:1} = '-' ]] && dash_switch rap $1 && return $?
+
+# -----------------------------------------------------------------------------
+# THE 'SIMPLE' OPPERATIONS THAT ALL RETURN.  NO SWITCHES INVOLVED:
+
+	# -------------------------------------------------------------------------
+	# rap xyz.deb:
+	# Simple install of .deb file, no switches please: smart argument.
+	# "rap LibreOffice_7.3.0_Linux_x86-64_deb.tar.gz" fails.  Must first unpack the archive and then: "dpkg -i *.deb".
+	if [ ${1: -4} = ".deb" ]; then
+		actionmsg "\nInstalling package: \"$1\""
+		ccolorize "$1" dpkg -i $1
+		return
+	fi
+	# -------------------------------------------------------------------------
+	# rap upgrade:
+	# Clean, update, upgrade, ... Debian docs recommend apt-get over aptitude for this.
+
+	if [ "$1" = 'upgrade' ]; then # Capitalize or not?
+		# This just updates the package lists:
+		actionmsg "\nRunning apt-get update";		apt-get update
+
+		# TODO: is then no better way? seems errorlevel can't be used.
+		[[ $(apt-get upgrade -s | wc -l) = '5' ]]\
+			&& infomsg "\n Up to date, nothing to do ..." && return
+
+		actionmsg "\nRunning apt-get dist-upgrade"; apt-get dist-upgrade
+		actionmsg "\nRunning apt-get clean";		apt-get clean
+		actionmsg "\nRunning apt-get autoremove";	apt-get autoremove
+		# These seem to do more harm than good.  It wants to delete zoom!
+#		actionmsg "\nRunning aptitude purge ~o\n";	aptitude purge '~o'
+#		actionmsg "\nRunning gtkorphan\n";			gtkorphan
+		actionmsg "\nRunning apt-get install -f\n";	apt-get install -f
+		return
+	fi
+
+	# If no switches are given we are just testing the status of packages: "$ rap package package " (unless the argument was ".deb" in which case it was an automatic install above).
+	if ! [ ${1:0:1} = ',' ]; then
+		while [ "$1" ]; do # Loop through all packages.
+			_rap_test_install "$1"
+			shift
+		done
+		return
+	fi
+
+# -----------------------------------------------------------------------------
+# THE 'COMPLEX' OPPERATIONS, SWITCHES INVOLVED:
+
+# PROCESS VARIABLES AND SWITCHES:
+	
+	local iinst_str='all available' # vs. 'installed'.
+	wwild_str='WILD' 	# To make "INsensitive" message.
+	after_filtering=	# Command output after grep filter.
+	ggrep_string=		# Incase we are using ',g' switch to add a grep filter.
+	line_count= 	# Total lines of output, cumulative if multiple searches.
+	common_tail=  # Completion of most messages, used three ways.
+	to_history= # Write expanded command to history list.
+	iinstall= 	# install, reinstall, upgrade, purge. Or flag 'installed only'.
+	wwhy=		# Unset or 1.
+	llist=		# Unset or 1.
+	ssearch= 	# Search method.
+	sshow=		# Unset or 'ffull' or 'bbrief'.
+	iinst=		# Unset or ' ~i' to search only installed.
+	ggrep_msg=	# 'Filter' msg in case 'grep' is used.
+	ggrep=		# Unset or 'ffilter' or 'hhighlight'.
+	ccase='-i'	# Contra grep we are INsensitive by default.
+	
+	if [ ${1:0:1} = ',' ]; then
+	for ((i=1; i < ${#1}; i++))
+	do
+	case ${1:$i:1} in
+		H ) to_history='yes' ;;
+
+		# rap ,W: Go to website:
+		W )
+		firefox https://packages.debian.org/stable/$2; return 0 ;;
+
+		# FILTERS/OUTPUT: Switches: g,h,x,i:
+		g ) ggrep='filter' ;;		  # Highlight and filter.
+		h ) ggrep='highlight' ;;	   # Highlight only.
+		X ) ccase=''; wwild_str='EXACT' ;; # Make EXACT.  Default is WILD.
+		# NB smart switch: install package OR filter 'installed only':
+		i ) iinstall='install' ;;
+
+		# THE 'DO' OPPERATIONS: Switches: i,r,u,p:
+		# i ) iinstall='install' ;; # smart switch.
+		r ) iinstall='reinstall' ;;
+		u ) iinstall='upgrade' ;; # Package upgrade only!
+		p ) iinstall='purge' ;;
+
+		# THE 'SEARCH' OPPERATIONS: Switches: ,f,n,d:
+		# All available:
+		f ) ssearch='filename' ;; 	# File names.
+		n ) ssearch='name' ;;		# Package Names.
+		d ) ssearch='description' ;;# Package Descriptions
+
+		# THE 'SHOW INFORMATION' OPPERATIONS: Switches: ,b,s ,w,l,a:
+		# All available:
+		b ) sshow='bbrief' ;; # Just the package description.
+		s ) sshow='ffull'  ;; # Full package information.
+		w )  wwhy=1 ;; 		  # 'why-not', 'why', 'rdepends' and 'depends'.
+		l ) llist=1 ;; 		  # List files installed by package.
+		a ) sshow='ffull' ; wwhy=1; llist=1 ;;
+
+		* ) errormsg "No such switch >,${1:$i:1}<"; _rap-syntax; return 1 ;;
+	esac
+	done  # For each switch.
+	shift # Proceed to arguments. There may be more than one!
+	fi
+
+	# ',i' is a smart switch:  If any ",n ,d ,b ,s" are given ',i' now flags 'installed only' with any 'search' or 'show':
+	[[ $iinstall == 'install' ]] && [[ $ssearch || $sshow ]] \
+	&& { iinst='~i'; iinst_str='installed'; iinstall= }
+
+	# Everything below here requires argument(s):
+	[ -z "$1" ] && errormsg "Insufficient arguments, need a package name or search string."	&& return 1
+
+# -----------------------------------------------------------------------------
+# THE 'DO' OPPERATIONS:
+# rap ,i,r,u,p:
+# Install, reinstall, upgrade or purge package(s): (apt-get/apt-cache permit wildcards and are case insensitive IF wildcards are used but sensitive otherwise. ) All these return.
+
+	if [ "$iinstall" ]; then
+	while [ "$1" ]; do # Loop through all packages listed.
+
+		# Handle errors:
+		_rap_test_install "$1"
+		# The package does not exist!
+		[ "$_rv" -eq 2 ] && { shift; continue }
+		# Can't install a package that is already installed:
+		[ "$iinstall" = 'install' ] && [ "$_rv" -eq 0 ] && { shift; continue }
+		# If not installing, then continue if package is NOT installed: (it is an error if we are asked to (eg) purge something that is not installed, no?):
+
+		actionmsg "\nAttempting to ${iinstall}: \"$1\" (Case sensitive, no wildcards please)"
+		[ "$iinstall" = 'install' ]   && apt-get install $1
+		[ "$iinstall" = 'reinstall' ] && apt-get install --reinstall $1
+		[ "$iinstall" = 'upgrade' ]   && apt-get install --only-upgrade $1
+		[ "$iinstall" = 'purge' ]     && apt-get purge $1
+		shift
+	done # while [ "$1" ]; do # Loop through all packages listed.
+	return
+	fi
+
+# -----------------------------------------------------------------------------
+# First attend to any 'grep' filter which applies to everything below.  NOTE: $1 refers to the search string, $2 must be a package name in any 'show' opperation, or a string in case of a 'search' opperation. $ggrep = 'filter', 'highlight' or unset.
+
+	if [ "$ggrep" ]; then
+		ggrep_string="$1"
+		shift # Must do it this way, $1 is search string NOT search target!!  IOW we must have a second argument:
+		[ -z "$1" ] &&
+		{	errormsg "Insufficient arguments: ,g and ,h need a string to search for eg: \"rap ,sh STRING PACKAGE\""
+			return 1
+		}
+		# This variable completes $common_tail: eg: " |, filter: "applet"| "
+		ggrep_msg=", $ggrep: \"${grn}$ggrep_string${mag}\""
+	fi
+
+# -----------------------------------------------------------------------------
+# THE 'SEARCH' OPPERATIONS: switches: ,f(ile), n(ame), d(escription).  All these searches are WILD, but adding ,x with or without ,g or ,h will be case sensitive for what is highlighted or filtered but NOT for what is found.  (But package files are always lower case anyway ??).
+
+while [ "$1" ]; do # Note, quote "to make this a single string/argument".
+
+	# -------------------------------------------------------------------------
+	# rap ,f:
+	# Search for files and packages that added them them.  Seems we can't use aptitude.  Wild always BUT case available, Global always.  Note you can achieve EXACT with simple brute string matching: > rap ,f "/visigrep " <.  This simply requires the '/' at the beginning of the name and a space following the name thus achieving EXACT matching. 
+	common_tail="matching: \"${grn}$1${mag}\" (All available, $wwild_str, $ggrep_msg):"
+
+	if [ "$ssearch" = "filename" ]; then
+		actionmsg "\nSearching for filenames/directories $common_tail\n"
+		# This is the only base command that takes '$ccase'.  Let's always use insensitivity here, since that's the rule with everything else.
+		ccolorize "$1" apt-file search $ccase \"$1\"
+		# 2022-10-16: Second search is pointless if first search returns nothing:
+		[[ $? == '1' ]] && shift && continue
+		# Now run a second search for INSTALLED packages that added the file:
+		infomsg "\nInstalled packages that have added files/directories matching: \"${mag}$1${grn}\":\n"
+		actionmsg "Running: \"dpkg-query -s <package names>\":\n"
+		
+		local prev=var''
+		for ((i=1; i <= ${#_execute_output}; i++)); do # output is set in colorize().
+			var="${_execute_output[i]/: \/*/}" # Grab first word of each line of array and strip off ': /' ... to end of line -- package names only.
+			[ "$prev" = "$var" ] && continue # Same package will be listed many times if it installs many matching files.
+			prev=$var
+			dpkg-query -s "$var" &> /dev/null && infomsg $var
+			line_count=$(( ++line_count )) # NB this is a cumulative count in case of multiple search: " rap ,N alsamixer alsaplayer ".
+		done
+	fi
+
+	# -------------------------------------------------------------------------
+	# rap ,d:
+	# Description strings will be searched for (always WILD) by aptitude in the LONG description BUT only the SHORT description shows, so the ,g switch would cut out that line (the short description) if the found string is NOT in it which is quite possible. Eg: " rap ,D "fastest grep" ": short description output does not contain the string even though it is found in the long description.  The case sensitivity in grep only applies to visible output which must NOT be restrictive of lines shown since it is FULL descriptions that are searched.
+	if [ "$ssearch" = 'description' ]; then
+
+		# Case ignored, Wild always, All active. (Strict by: (" $1 ") but DONT! these are strings not filenames.)
+		common_tail="matching: \"${grn}$1${mag}\" ($iinst_str, Ignoring case$ggrep_msg):"
+		actionmsg "\nSearching for package description strings $common_tail\nNote, output list shows packages who's description contains the search string but the descripton itself is not shown so colorization is irrelevant.\n"
+		# NB need this just to maintain the line count:
+		ccolorize "$1" aptitude search "$iinst ?description($1)"
+	fi
+	# -------------------------------------------------------------------------
+	# All apitude searches: ,n(ame) ,b(rief) ,s(how) below use '_nname': EXACT searches if ',x' is given or WILD otherwise.
+
+# 2022-09-28:	Rework how $inst is added to the string -- just once for all:
+#{
+	_nname="?name($1)" # WILD name.
+
+	# " ,x " switch kills variable, which ACTIVATES case sensitivity:
+	# Don't run _rap_test_install unless we are doing EXACT searches!
+	if [[ -z "$ccase" ]]; then
+		#_nname='?name(^'$1'$)' # EXACT name.
+		_nname="?name(^$1$)" # EXACT name. Add '$' to make exact at both ends of string.
+		_rap_test_install "$1"
+		# Package does not exist:
+		[ "$_rv" -eq 2 ]               && { shift; continue }
+		# Package is not installed AND we are only searching installed packages:
+		[[ "$_rv" -eq 1 && "$iinst" ]] && { shift; continue }
+	fi
+	# Now prepend 'iinst' (might just be blank), and add single quotes:
+	_nname="'$iinst$_nname'"
+	#eg: |' ~i ?name(^grep)'| 
+#}
+	# -------------------------------------------------------------------------
+	common_tail="matching: \"${grn}$1${mag}\" ($iinst_str, $wwild_str$ggrep_msg):"
+
+	# rap ,n:
+	#Search for package names. aptitude output much neater than apt-cache:
+	if [ "$ssearch" = 'name' ]; then
+		actionmsg "\nSearching for package names $common_tail"
+		# NB keep quotation marks below or we get all packages displayed:
+		ccolorize "$1" aptitude search "$_nname"
+	fi
+
+# -----------------------------------------------------------------------------
+# THE 'SHOW INFORMATION' OPPERATIONS. Argument is a package name: Switches: ,b,s,w,l,a = Brief description only, Show package information, Why/why-not, List files installed, All of the above.  All these are WILD. ',x' imposes EXACT.
+
+	common_tail="for package(s): \"${grn}$1${mag}\" ($iinst_str, $wwild_str$ggrep_msg):"
+
+	# -------------------------------------------------------------------------
+	# rap ,b: Brief description: This is almost always good enough, ',s' gives arcane details.
+	# Always case insensitive for package names. Note, when using ',g' with any of these switches, remember that the entire description consists of a single logical line, so the entire description can end up being filtered out. ',x' enforces EXACT.
+	
+	if [ "$sshow" = 'bbrief' ]; then
+		actionmsg "\nShowing brief descriptions $common_tail"
+
+	# 2022-10-06: Rework of line count: Can't use the normal mechanism in case of a brief search which cuts down the number of lines.  Also, the count wasn't working anyway due to the redirection of the calls to colorize.
+		ccolorize NoPrint "$1" aptitude show "$_nname"
+
+	# SED: Use the -n option along with the /p print flag to display only the colorized lines. Here the -n option suppresses the duplicate rows generated by the /p flag and prints the replaced lines only one time.
+	# NB NO SPACES BETWEEN '\' AND LINEFEED OR GET SED ERROR!!
+#{ scope of 'bb'.
+bb=$( print -l $after_filtering | sed \
+-nre "s/(Package: .*)/${yel}\n----------------------------------------------------------\n\1${nrm}/p" \
+-e "s/(State: .*)/${yel}\1${nrm}/p" \
+-e "s/(Uncompressed Size: .*)/${yel}\1${nrm}/p" \
+-e "s/(Description: .*)/${yel}\1${nrm}/" \
+-e "/Description: /,/^Homepage: /p" \
+-e '/Homepage: .*$/d' )
+
+		print -l $bb
+		bb=( ${(f)bb} )
+		line_count=$(( $#bb - 1 + line_count )) 
+	fi
+
+	# rap ,s: Show package information:
+	if [ "$sshow" = 'ffull' ]; then
+		actionmsg "\nShowing full information $common_tail"
+		# This turns selected lines yellow.  Note, we don't need to strip out existing color codes ;-)
+		ccolorize NoPrint "$1" aptitude show "$_nname"
+
+# 2022-10-13: Colorize 'Size' line:		
+bb=$( print -rl "$after_filtering" | sed \
+-re "s/(Package: .*)/${yel}\n---------------------------------------------------------\n\1${nrm}/" \
+-re "s/(State: .*)/${yel}\1${nrm}/" \
+-re "s/(Uncompressed Size: .*)/${yel}\1${nrm}/" \
+-re "s/(Description: .*)/${yel}\1${nrm}/" )
+
+		print -l $bb
+		bb=( ${(f)bb} )
+		line_count=$(( $#bb - 1 + line_count )) 
+#} scope of 'bb'
+	fi
+
+# -----------------------------------------------------------------------------
+#  ,w and ,l are always EXACT and ALL:
+
+	common_tail="package: \"${grn}$1${mag}\" (All available, EXACT$ggrep_msg):"
+	# -------------------------------------------------------------------------
+	# rap ,w: why-not, why, rdepends, depends.
+	# All dependencies both ways:
+	if [ "$wwhy" ]; then
+		# This is redundant with 'show' (Conflicts, Provides)
+		infomsg "\nPackages that conflict with $common_tail"
+		ccolorize "$1" aptitude why-not $1
+
+		common_tail="package: \"${grn}$1${mag}\""
+
+		infomsg "\nPackage chains that depend on $common_tail"
+		ccolorize "$1" aptitude why $1
+
+		# This and above are very similar.
+		infomsg "\nOther packages that depend on $common_tail"
+		ccolorize "$1" apt-cache rdepends $1
+
+		# This is redundant with 'show' (Depends, PreDepends)
+		infomsg "\nDependencies of $common_tail"
+		ccolorize "$1" apt-cache depends $1
+	fi
+	# -------------------------------------------------------------------------
+	# rap ,l:  (It seems 'aptitude' can't do this):
+	if [ "$llist" ]; then
+		infomsg "\nFiles installed by package: $common_tail"
+		ccolorize "$1" apt-file list $1 # '-i' doesn't work here.
+	fi
+
+	shift
+done # while loop thru all packages.
+
+	# -------------------------------------------------------------------------
+	# Trailing message for any failure.
+	[ -z "$line_count" ] && { warningmsg "Nothing to show"; return 1 }
+
+	# Trailing message for any successful output:  Note lline_count accumulates in case of more than one search:
+	infomsg "\n$line_count total logical lines of output"
+	advicemsg "To see package information: \"rap ,{bswla} <PACKAGE[S]>\"
+((b)rief, (s)how full info, (w)hy, (l)ist files, (a)ll of ,s,w,l)."
+} #function _rap ()
+
+# =============================================================================
+function _rap-syntax ()
+{
+echo "
+$_common_syntax
+
+${grn}SIMPLE:
+${red}rap upgrade ${nrm}: Upgrade the entire system.
+${red}rap <PACKAGE[S]> ${nrm}: Report status of PACKAGE[S].
+${red}rap FILENAME.deb$:{nrm}: Install a single .deb package.
+${red}rap ,W ${nrm}: Browser to Debian's download/information site for packages:
+
+${grn}ACTIONS:
+${red}rap ,{irup} <PACKAGE[S]>:${nrm}:
+... Install, Re-install, Upgrade or Purge <PACKAGE[S]>.
+
+${grn}SEARCHES:
+${red}rap ,{i}{fnd}(g[x]) (STRING) <STRING[S]>${nrm}:
+... Search PACKAGE(S) for STRING (WILD) within:
+Files included, Name of package, Description of package.
+With ',i': search only installed packages.
+
+${grn}SHOW:
+
+Information about packages (WILD):
+${red}rap ,{bswla}(g[x]) (STRING) <PACKAGE[S]>:${nrm}
+... Brief description, Show full information, Why/why-not.
+With ',i': search only installed packages.
+
+List files installed by PACKAGE (installed only)
+All of the above (all info available).
+
+STRING[S]:     One or more strings. (Quote to handle spaces!)
+FILENAME[S]:   One or more complete filenames.
+PACKAGE[S]:    One or more complete package names.
+
+,g: 'grep' the output of the command to filter and highlight STRING.
+,h: 'grep' the output of the command to highlight STRING without filtering.
+,X: Make all searches EXACT (vs. WILD).
+,i: Used in combination with a SHOW or SEARCH opperation indicates 'installed packages only'.
+
+'WILD': Automatic wildcard and case insensitive. (DON'T add wildcards!)
+'EXACT': case sensitive and no partial matches will be found.
+"
+} # _rap-syntax
+
+# =============================================================================
+function _rap-usage ()
+{
+_rap-syntax
+
+echo -e "
+
+USAGE: 'rap' is a wrapper around dpkg, and the 'apt' family of utilites.
+If there is nothing following 'rap' syntax help will be shown.
+
+${red}rap upgrade ${nrm}
+... Performs 'apt-get: (update, dist-upgrade, clean and autoremove)', then aptitude purge ~o, gtkorphan and apt-get install -f ... in one fell swoop. Use these commands seperately if needed, but it won't be.
+
+Most actions below permit multiple targets, eg:
+
+${red} rap ,u firefox thunderbird ${nrm}
+... Upgrade just firefox and thunderbird.
+
+${red} rap ,p mc ${nrm}
+... Purge package 'mc'. Note I don't include 'aptitude remove' in this wrapper, because I myself never do anything but purge.
+
+${red} rap ,f \"/visigrep \";
+... Search all files in all packages for 'vizigrep as a complete filename by demanding a leading slash and a following space.
+
+All output is colorized to highlight the argument string(s) being processed, but note that in the case of searches in the description ( rap ,d ), since only short descriptions are ever shown, should it be the case that the match is found in the long description, no match will be visible even tho a match was found. Use: \" rap ,{bs} <PACKAGE[S]> \" to view the description(s).
+
+Beware using ,g with ,b or ,s (description only or full package information) since it is likely to remove entire descriptions since they are single logical lines.
+
+{red} rap ,nhX STRING PACKAGE\":{nrm}
+... ,h highlights STRING ,x case sensitively.
+
+All 'Search' and 'Show' forms of rap accept the ,g and ,h switches, which simply pipes the command output through grep and thus permits the output to be highlighted and (with ,g), filtered. All normal grep regex forms are accepted. The regex must be the first argument after the switches, and it will be applied to all output produced by the rest of the command line. Note that this can 'kill' search output if no match is found to the 'grep' string. And it highlights text in yellow over and above the automatic highlighting of the arguments mentioned above.  The ,X switch makes all searches EXACT as far as any string being looked for by the ,g and ,h switches but it often does not apply to the actual output of the basic command, only to highlighting/filtering.  Use ,x with caution.
+
+Searching:
+
+All searches are WILD unless ,x is used' (And 'rap ,d' always ignores case.)
+
+${red} rap ,fg '^zsh-common' share/doc META ${nrm}
+Search for all installed files who's full path contains the strings \"share/doc\" or \"META\" and filter the results for \"^zsh-common\" (that is, at the beginning of the line, thus the start of the name of a package).
+
+Note, the following searches only access the simplest of aptitude's abilities. For more complex searches use 'aptitude' directly since it offers an almost unbelievable control over searching.
+
+${red} rap ,n mc-dat ${nrm}
+Search for any available package with \"mc-dat\" in its Name.
+
+${red} rap ,ngX \"easy to use\" swift ${nrm}
+Search for any installed package with \"swift\" in its Name or path, and \"easy to use\" (Case sensitive) in its SHORT description.
+
+${red} rap ,ng \"^v \" pcre ${nrm}
+Search for any available virtual package with \"pcre\" in its Name. ( \"^v \" = find 'v' then a space at the beginning of the line.)
+
+${red} rap ,d CAD \"easy to use\" ${nrm}
+Search all package Descriptions for \"CAD\" then for \"easy to use\".  Note these are separate searches not cumulative searches.
+
+${red} rap ,gd \"easy to use\" \"easy to use\"${nrm}
+Search all installed package SHORT Descriptions for \"easy to use\".  Note, 'aptitude' searches ENTIRE descriptions, but only displays SHORT descriptions (in case of a 'search'), thus the ',g' filter restricts found strings to the short descriptions. It's a bit counter intuitive.
+
+Show (package information):
+
+${red} rap ,swgX package xfce4 ${nrm}
+Show 'Show' and Why/why-not/depends/rdepends information for package 'xfce4' and filter/highlight the ouptut to find lines with 'package' in them EXACT.
+
+====================================================================
+
+aptitude package status flags (seen on the left margin):
+
+Values of the first character, the \"current state\" flag:
+
+i - the package is installed and all its dependencies are satisfied.
+c - the package was removed, but its configuration files are still present.
+p - the package was purged, or it was never installed.
+v - the package is virtual.
+B - the package has broken dependencies.
+u - the package has been unpacked but not configured.
+C - the package configuration was interrupted.
+H - the package installation was interrupted.
+
+Values of the second character, the \“action\” flag: (Actions that are pending on the package.):
+
+i - the package will be installed.
+u - the package will be upgraded.
+d - the package will be removed, leaving its configuration files.
+p - the package will be purged, including its configuration files.
+h - the package will be held back: it will be kept at its current version, even if a newer version becomes available, until the hold is cancelled.
+F - the package upgrade has been forbidden.
+r - the package will be reinstalled.
+B - the package is “broken”: some of its dependencies will not be satisfied. aptitude will not allow you to install, remove, or upgrade anything while you have broken packages.
+
+Values of the third character:
+
+A - automatically installed
+U - untrusted
+"
+} # _rap-usage
+
+# ==============================================================================
+
+return # Comment this line out to run tests:
+
+_function_test ()
+{
+	local integer i=0
+	while read aa; do
+		let i++
+		actionmsg "\nline ($i): running $aa:"
+		eval ${=aa}
+	done
+}
+
+_function_test <<< "\
+
+rap ,f Vizigrep. Xfce-so
+rap ,Cf Vizigrep. Xfce-so
+#rap ,CF igrep Xfce-
+#rap ,n Xfce-
+#rap ,Cn Xfce-
+# combine two 'show' functions:
+rap ,Cbw grep
+"
+return
+
+# Unused tests from above:
+
+# DO actions, incomplete: ',x' is useless but causes no problem.
+rap ,i grep sipgrep Sipgrep ipgrep Grep
+rap ,p sipgrep ipgrep Grep
+echo Test multiple, installed, uninstalled, non-existant, partial, case error:
+rap grep sipgrep Sipgrep ggrep Grep
+# as above but with ',x'
+rap ,x grep sipgrep Sipgrep ipgrep Grep
+rap ,w grep sipgrep Sipgrep xfce
+rap ,Cw grep sipgrep Sipgrep xfce
+# This should be WILD:
+rap ,b grep sipgrep Sipgrep xfce
+# This should be EXACT:
+rap ,Cb grep sipgrep Sipgrep xfce
+

@@ -1,0 +1,224 @@
+#!/usr/bin/zsh
+
+# Arg $1 is filter of filelist.
+
+# =============================================================================
+
+nview ()
+{
+	n_init 
+
+	local IFS=$'\n'
+	local prev_buffer=		# When searching, this is previous SEARCHBUF.
+	local Color="${green}"	# Color of searched-for text, one use.
+
+# nview(): # Cleanup on exit: -------------------------------------------------
+
+	# Caught by '^C':
+	TRAPINT() {	n_exit; actionmsg User break; return 130 }
+	trap 'n_exit; actionmsg Successful exit; return 0' EXIT
+
+# nview(): Initialize the ffiles: ----------------------------------------------
+
+	# NB: if we don't zero 'bbody' then it is persistent! Declare together so they're the same type of associative array:
+	typeset -A files=() body=()
+
+	# 'N': Prevent 'file not found' msg in empty directory.
+	local files_list=( *(N.) )
+	# Filter with command line argument. (@M) = remove unmatched elements, :#  = pattern match, (#i) = case insensitive match.
+	files_list=( "${(@M)files_list:#(#i)*$1*}" ) 
+	local filename="$files_list[1]" # Let's initialize the bbody:
+
+# nview(): Initialize the bbody. First determine if we can highlight: ----------
+
+	integer toggle_highlight=0 # Assume no highlighting on start.
+	local highlight_cmd=()
+	local msg=
+	n_highlight	# If 'highlight' cmd found, create command string for n_make_body.
+	msg="Welcome to nview $msg." # First msg is 'highlight' sstatus.
+
+	local body_list=()
+	n_make_body
+
+# nview(): Draw windows: ------------------------------------------------------
+
+	n_make_windows
+
+# nview(): Loop, processing each keystroke in turn: ---------------------------
+
+	while (( 1 )); do
+
+# nview(): Loop starts with search because SEARCHBUF can be preloaded: --------
+
+	[[ "$ACTION" = 'START' && "$SEARCHBUF" ]] && ACTION='SEARCH'
+	
+
+	if [[ "$ACTION" = 'SEARCH' ]]; then
+		n_make_body
+		n_search body
+	else # We aren't searching so show the normal sstatus message:
+		prev_buffer= # Must kill this.
+		# We only display the default message if there's no other message:
+		[ ! "$msg" ] &&
+		msg="Current file: #$files[currentE] of #$files[lastE] entries. Filter:  [$SEARCHBUF].  'h' for help, '/' to begin search."
+	fi
+
+# nview(): Resting.  Draw, refresh and wait for next keystroke: ---------------
+
+	n_msg "$msg"; msg=  # Kill old message so default shows IF no other msg.
+
+	# We must refresh both windows even if just to update the cursor position:  nn_draw() line 484 'DDRAW=PPAGING' because we must redraw everything every time.
+	DRAW='PAGING'
+#printf  "%-20s %s\n" ${(kv)files} > /dev/pts/2
+	n_draw files 0 0		# The ffiles window.
+	DRAW='PAGING'			# Need this! Must update when searching.
+	n_draw body  0 0 		# The body window.
+	zcurses refresh Files Body # Must refresh both or no input accepted.
+
+	[ "$ACTION" = "SEARCH" ] &&	zcurses refresh Files Body Status \
+							 ||	zcurses refresh Files Body
+
+	n_get_key # Grab a key.
+
+# nview(): First check if we are searching:------------------------------------
+
+	# Legal keys: UP/DN ENTER BKSP or printable char added to search string:
+	if [ "$ACTION" = "SEARCH" ]; then
+	case "$NKEY" in
+		(UP)   ;& 
+		(DOWN) ;& 
+		($'\n')	ACTION=''; continue ;; # Enter or UP/DN: return to filtered list.
+		($'\b'|BACKSPACE) SEARCHBUF="${SEARCHBUF%?}" ;;	# Backspace one char.
+		# Let's filter out non-printable chars from the search string:
+		# Better illegal key handling: normal characters only please.
+		(*)	[[ "$NKEY" = ([[:print:]]) ]] && SEARCHBUF+="$NKEY" \
+										  || { ERRLINE="$0:$LINENO"; NKEY= ; } 
+	esac
+
+# nview(): Actions that don't involve a redraw: -------------------------------
+
+	else
+		case "$NKEY" in
+		# Toggle between highlight (ANSI) and normal view:
+		('a')
+			if [ "$highlight_cmd" ]; then
+				# Toggle the state of highlighting: 1>0 or 0>1
+				toggle_highlight=1-toggle_highlight
+				msg="Toggling syntax highlight: $toggle_highlight (1=on, 0=off)."
+				n_make_body # Must refresh since coloring will change.
+				continue # Wait for next keystroke.
+			else
+				msg="Syntax highlighting is not available."
+				continue # Nothing to do, display msg and wait for next keystroke.
+			fi ;;
+		# TAB toggles active window.
+		($'\t')
+			(( files[active] = 1 - files[active] ))
+			(( body[active]  = 1 - body[active] ))
+			continue ;;
+		('q') return 0 ;;
+		(/) ACTION='SEARCH'; continue ;; # Begin a search.
+		esac
+	fi
+
+# nview(): Actions that require a redraw - navigation: ------------------------
+# NB SEARCH always requires redraw! 
+
+	ERRLINE= # Set in nn_input. We are at the bottom of the barrel as far as legal keystrokes go.  Anything rejected by nn_input is an error.
+	if [ $body[active] -eq 1 ]; then
+		n_input body	# Load file into the viewing window.
+		[ "$ERRLINE" ] && {	msg="$ERRLINE: Error! Illegal key ..."; continue }
+	else # Files is active:
+		n_input files	# The ffiles window.
+		[ "$ERRLINE" ] && {	msg="$ERRLINE: Error! Illegal key ..."; continue }
+		[[ "$NKEY" = 'UP' || "$NKEY" = 'DOWN' ]] &&
+		{
+			filename="$files_list[$INDEX]" # Load new file:
+			# Files can be deleted from another terminal! List might be wrong!
+			[ -f "$filename" ] || { msg="FILE \"$filename\" NOT FOUND"; continue }
+			# Seems zero length ffiles are ok?
+			[ -s "$filename" ] || msg="FILE \"$filename\" HAS ZERO LENGTH"
+			n_make_body
+			# New geometry:
+			body[lastE]="$#body_list"
+			body[currentE]=1
+			body[topE]=1
+			body[bottomE]="$body[hight]"
+		}
+	fi # Which window, bbody or ffiles?
+	done
+} #END: nview().
+
+#===============================================================================
+# Same form as nn_make_main but specific to nn_preview:
+n_make_windows ()
+{
+	integer Hight=$LINES-1  # Num of lines on screen minus one for the sstatus line.
+	integer FW=$COLUMNS/5		# File window width.
+	integer BW=$COLUMNS-$COLUMNS/5	# Body window width.
+	# Name,	Y=hight, X=width, Y-start, X-start, Body colors, Border colors (if there is a color, a border is created).
+
+	n_window Files	$Hight	$FW 	 0		0	 default/default  red/black 
+	n_window Body	$Hight	$BW 	 0		$FW	 default/default 
+	n_window Status	1 		$COLUMNS $Hight	0	 yellow/blue
+
+	# nview(): Initialize some variables:------------------------------------
+
+	# 10 elements in array:
+	# These are constant:
+	# These are 'inside' sizes so they shrink by two because there is a border.
+	files[window]="Files"			# Name of this window.
+	files[list]="files_list"		# The name of the ffiles list array.
+	files[lastE]="$#files_list"		# Last element, NOT bottom of page. firstE = 1
+	files[hight]=$((Hight-2)) 		# Minus two for the border ( besides one for the sstatus line).
+	files[width]=$(($FW-2))			# Minus two for the border.
+	# These vary:
+	files[topE]=1					# Top of the current page.
+	files[bottomE]="$files[hight]"	# Bottom of CURRENT page. Must initialize!
+	files[offset]=0					# When we have scrolled right.
+	files[currentE]=1				# Current element.
+	files[active]=1					# Only one active window at a time.
+
+	# NO BORDER! These are constant, the rest can't be set until a file is selected.
+	body[hight]=$((Hight)) 		
+	body[width]=$BW
+	body[window]="Body"				# Name of the window.
+	body[list]="body_list"			# The array holding the contents of a file.
+	body[lastE]="$#body_list"
+	body[currentE]=1
+	body[topE]=1
+	body[bottomE]="$body[hight]" # Must initialize!
+	body[active]=0 		# Only one window can be active.  Used in nn_draw() to bold the active window.
+}
+
+#===============================================================================
+# Determine presence of 'highlight' program and make highlighting command. Only one use.
+n_highlight ()
+{
+	if type highlight &> /dev/null; then # Search for 'highlight' command.
+
+		# Need 'failsafe' or redirection eats content.  Unfortunately '-O xterm256' doesn't work, the color codes are not understood. '-S sh' forces shell code, otherwise we need the '.sh' extension on the file
+		highlight_cmd=( highlight --failsafe -S sh -t 4 -O ansi )
+
+# USER: pick a highlighter:
+# No style accepted if 'console' is used. pygmentize with 'console' and highlight with 'ansi' produce identical output. Again, 'terminal256' doesn't work.
+#highlight_cmd=( pygmentize -f console -O tabsize=4 -l zsh )
+#highlight_cmd=( pygmentize -f terminal256 -O tabsize=4,style=rrt -l zsh )
+
+		msg="'highlight' is available"
+	else
+		msg="Sorry, but syntax highlighting is not available."
+	fi
+} #END: n_detect_highlight().
+
+# This creates the bbody (file contents) either with 'highlight' or raw.  It permits toggling. Two calls.
+n_make_body ()
+{
+	if [[ "$toggle_highlight" = 1 ]]; then # Syntax highlighting is active:
+		 body_list=( "${(@f)$( $highlight_cmd[@] $filename )}" ) 2>&1
+
+# USER: with or without line numbers:
+#	else body_list=( "${(@f)"$(<$filename)"}" )
+	else body_list=( "${(@f)"$(cat -n $filename)"}" )
+	fi
+}

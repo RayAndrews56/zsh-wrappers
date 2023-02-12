@@ -1,0 +1,265 @@
+#!/usr/bin/zsh
+
+# miscfunctions: for small functions.
+
+# Wrapper around 'tree'.  See also 'ncdu'.
+# 2023-01-01: ,s = now size info on each line of output. ,d = date info on each line.  These replace appending native switches, no big deal.
+t ()
+{
+	[[ "$1" = '-h' || "$1" = '-s' || "$1" = '-u' ]] && \
+	{
+	infomsg "
+t ,HfCsu[LEVELS] [PATH] [@]
+
+,H: To history
+,f: Include files
+,C: Case Sensitive
+,s: Show sizes (not much real info for directories since contents not included).
+,d: Show date of last file modification.
+,u: Show disk usage of all directories appended to bottom of output.
+
+[@]: Append any native 'tree' switches such as:
+-t: Sort by modification time.
+-f: Show full paths of files.
+-P "'PATERN'" ... must double quote AND single quote the pattern!
+--matchdirs:
+If a match pattern is specified by the -P option, this will cause the pattern to be applied to directory names (in addition to filenames).  In the event of a match on the directory name, matching is disabled for  the  directory's contents.
+"
+		return
+	}
+	local levels=
+	local dir_flag='d'	# Default is directories only.
+	local to_history=	# Global flag for writing to history list.
+	local ccase="--ignore-case"
+	local size_flag=
+	local date_flag=
+	local usage_flag=
+
+	if [[ ${1:0:1} = ',' ]]; then
+		for ((i = 1; i < ${#1}; i++)); do
+		case ${1:$i:1} in
+			H ) to_history=1 ;; 	# Flag used in 'execute'.
+			C ) ccase='' ;;			# Case sensitive.
+			d ) date_flag='is' ;;	# Show date, no indentation.
+			f ) dir_flag= ;;		# Show files too.
+			s ) size_flag='is' ;;	 # Show sizes, no indentation.
+			u ) usage_flag='usage' ;; # Disk usage summary appended.
+		  <-> ) levels=${1:$i:1} ;;
+			* ) errormsg "No such switch >,${1:$i:1}<"; return 1 ;;
+		esac
+		done
+		shift # Do this here. There might not be any switches!
+	fi # Process switches.
+
+	[ "$levels" ] && levels="-L $levels"
+
+	# --du: size summary, (h)uman readable, (a)ll files including '.xxx' hidden, (C)olorize, (F)ile type indicator char.
+	_execute "tree ${ccase} ${levels} -aCF${dir_flag}${size_flag}${date_flag} $*"
+
+	local ddir=
+	# Force any dir given to precede any switches.  If no dir given default is current dir and remainder of tail is switches.
+	[[ ${1:0:1} != '-' ]] && ddir=$1 
+
+	#  If you do " t / " it will take a long time to complete, since 'du' must be done for the whole disk.  -x: skip dirs on other file systems, -c: grand total as well, -h: human readable, ,-s: only summary --apparent-size: shows file sizes vs disk usage.
+	if [ "$usage_flag" = 'usage' ]; then
+		outputmsg "\nDisk useage: \n\n${nrm}$( du -h )"
+	else
+		outputmsg "\nTotal size: $( du -sh $ddir )" # Summary size, human-readable.
+	fi
+}
+
+# 2022-10-24: I thought this used to be much easier:
+# If any system files are changed or added, preserve copies so that furture OS can have them restored quickly.  Best to save a virgin copy of whatever was changed too.
+changed ()
+{
+	while [ $1 ]; do
+		# -v verbose, -r recursive (to handle directories), don't ommit the: " -- ".
+		/bin/cp -vr --parents -- "$PWD/$1" /aWorking/Changed/
+		shift
+	done
+}
+
+# Go directly to the specified command in the man page:
+# (Probably not needed "info zsh read" does the same thing.
+zhelp() { man zshbuiltins | less -p "^       $1" }
+
+# Right prompt will show ticking time.  NB this prevents scrolling up.
+tick ()
+{
+	RPS1='%B%F{yellow}[%D{%L:%M:%S}]%f %w'
+	TMOUT=1
+	TRAPALRM() { zle reset-prompt }
+}
+
+installed () # Just things installed by "rap ,i" of course:
+{
+	history -ni 1 | grep --color=auto -e "rap ,i $1" -e "rap ,p $1"
+}
+
+junk ()
+{
+	# Automatic target will be created for move:  Must do this here, so msg below has name of target to refer to:
+	ttarget="/aMisc/Junk/$(date +%F--%T)"
+	# Note unlike with 'back' we can't junk the current directory!
+	ssubject="$1"
+	inputmsg "\nDirectory \"$ttarget\"\n\
+will be created for junking of: \"$ssubject\"\n\
+('y' to continue, any other key to abort// ...)"
+	read -sq 
+	# '-p': create all parents as needed:
+	mkdir -vp "$ttarget"
+	mv -v $@ $ttarget
+	advicemsg "type: \"cd \$ttarget\" to change to the backup directory."
+}
+
+back ()
+{
+	# Automatic target will be created for copy:
+	[ "$1" ] && ssubject="$1" || ssubject="$PWD"
+
+	jjunk=(/Backup/*/); integer ccount=$#jjunk;
+	let ccount++
+	ttarget="/aMisc/Backup/($ccount)$(date +%F--%T)"
+
+	inputmsg "\nDirectory \"$ttarget\"\n\
+will be created for backup of: \"$ssubject\"\n\
+('y' to continue, any other key to abort// ...)"
+	read -sq
+
+	mkdir -vp "$ttarget" # '-p': create all parents as needed:
+	/bin/cp -vdrp "$ssubject" "$ttarget" # verbose, no dereference, recursive, preserve all stamps.
+	advicemsg "type: \"cd \$ttarget\" to change to the backup directory."
+}
+
+# Call gedit or mcedit if in xterm or otherwise.
+e ()
+{
+	# 2022-09-24: Debian 11 TERM is 'xterm-256color'.  This covers anything with 'xterm' in it:
+	if [[ -z ${TERM##*xterm*} ]]; then # NB DON'T OMIT SPACES!
+		geany -i $@ &  
+	else
+		mcedit $1
+	fi
+}
+
+# For all existing normal files in $S, (skip directories) strip the path and update  '/aWorking/Zsh/Source/Wk' to '/aWorking/Zsh/Source':
+freshensource ()
+{
+	actionmsg "Updating Source directory from Wk directory."
+	S
+	for aa in *(.:t); do
+	# update only, preserve attributes, prompt before copy.
+	[ -e "$W/$aa" ] && /bin/cp -upi $W/$aa .
+	done
+	W
+}
+
+md () { mkdir $@; cd $1; }
+
+2notes  () { echo $@ >> /aWorking/Text/notes.txt }
+2system () { echo $@ >> /aWorking/Text/system.txt }
+2debian () { echo $@ >> /aWorking/Text/debian.txt }
+2znotes () { echo $@ >> /aWorking/Text/znotes.txt }
+
+# Ray's first script :-)
+function path ()
+{
+	infomsg "Current path:"
+	echo -e ${PATH//:/'\n'} # Replace colon with newline.
+}
+
+counting-line () { echo -e "\e[31;1m \n12345678-10-345678-20-345678-30-345678-40-345678-50-345678-60-\
+345678-70-345678-80-345678-90-345678-100-45678-10-345678-20-345678-30-345678-40-345678-50-345678-60-\
+345678-70-345678-80-345678-90-345678-200\e[0m"; }
+
+#{ USED BY WRAPPERS:
+
+_common_syntax="${grn}SYNTAX:${nrm}\n\n-(suhe): Syntax, Usage, or full Help.  Edit function.\n"
+
+# First arg is name of calling function, 2nd arg is switch.  Dash switches are firstish.
+dash_switch ()
+{
+	# Add a default switch if a dash followed by a space is given eg: " l - "
+	local sswitch="${2:1:1}"
+	[ -n "$sswitch" ] || sswitch='s' # Default.
+	case $sswitch in
+		s ) _$1-syntax; return 0 ;; # Syntax only.
+		u ) _$1-usage;  return 0 ;; # Full help: usage and syntax.
+		h ) _$1-syntax; _$1-usage;  return 0 ;; # Full help: usage and syntax.
+		e ) geany -i $S/Wk/$1; actionmsg "Sourcing \"$S/Wk/$1\""; . $S/Wk/$1; return 0 ;; # edit script.
+		* ) errormsg "No such switch \" -$sswitch \""; _$1-syntax; return 1 ;;
+	esac
+}
+
+# Examples of use in ' i' and ' rap ': test a function with several different arguments:
+_function_test ()
+{
+	local integer i=0
+	local aa=
+	while read aa; do
+		let i++
+		[ ! "$aa" ] && continue # Blank lines or end of input.
+
+outputmsg "\n$( echo "\nLine ($i): Running: ${red}\"$aa\"${cyn} ===============================================================================" |
+ sed -re "s/^(.{1,$(( COLUMNS + 13 ))}).*/\1/" )"
+
+		eval ${=aa} # 2> /dev/null
+
+		# '$1' is any argument, usually 'N' just forcing this message and a pause:
+		[ ! $1 ] && \
+		{
+			inputmsg "\nPress any key to contine or '^C' to quit ..."
+			read -sq
+		}
+	done
+}
+
+#} USED BY WRAPPERS
+
+# =============================================================================
+return
+
+GIT ()
+{
+	cd /aWorking/zshbuild
+	git pull
+# sometimes:
+#./configure --prefix=/zsh
+	make -s
+	make check
+#make install
+#make install.modules    ?? no, 'make install' is better.
+	advicemsg "\nNow run 'ZSH' to copy build to '/zsh/bin'."
+}
+
+ZSH ()
+{
+	cd /aWorking/zshbuild
+	[ -e "Src/zsh" ] || { errormsg "No zsh here boss"; return 1 }
+	# cut 'zsh-5.1.1-67-gbc2e73b' to 'zsh-5.1.1-67'
+	cp -v Src/zsh /zsh/bin/${ZSH_PATCHLEVEL%-*}  # cut from end.
+	# Can't copy becuase file is busy, but this works:
+	ln -sf /zsh/bin/${ZSH_PATCHLEVEL%-*} /zsh/bin/zsh
+	cd -
+}
+
+# This does NOT remove redirection, thus useless in any command with redirection.
+#typeset -g TLC
+#TRAPDEBUG()
+#{
+	# As an array:
+#  (( $#functrace == 1 )) && TLC=(${(z)ZSH_DEBUG_CMD})
+#}
+
+	# This works perfectly to print directly to screen:
+	#(( $#functrace == 1 )) && print -u2 "$ZSH_DEBUG_CMD"
+
+	# Top Level Command capture:
+	# As a string:
+	#(( $#functrace == 1 )) && TLC="${ZSH_DEBUG_CMD}"
+	# Broken into an array:
+	# 'Q' strips off quotation marks:
+	#(( $#functrace == 1 )) && TLC=(${(Q)ZSH_DEBUG_CMD})
+	# And we can strip off quotation marks from an array too:
+	#(( $#functrace == 1 )) && TLC=(${(Q)${(z)ZSH_DEBUG_CMD}})
+

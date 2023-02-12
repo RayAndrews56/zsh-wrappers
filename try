@@ -1,0 +1,211 @@
+#!/usr/bin/zsh
+
+# Global variable set to any single file match found by ffind_match().
+typeset -g MATCH_FOUND
+
+# Switch ',n' as used in '_restore()' in 's', where we don't care about misses when looking for automatic backup number -- of course we have nothing but misses when counting down!  There should hardly ever be duplicated index numbers tho.
+
+# This is used once in 'try', twice in 'try_compare' and three times in file 's'.
+# Returns 0 on errors, 1 on no matches found, 2 exact match, 3 on unique completed match, 4 on unique match but with ambiguities, 5 on unresolved ambiguities.  Used here and in fce s() and _restore(). This fce can also be used like this:
+# $ ffind_match rap,2
+
+function find_match ()
+{
+	if [ "$1" = '-s' ]; then
+		echo -e "
+This fce returns one of six conditions:
+0: error.
+1: no match at all
+2: exact match without ambiguities
+3: unique completed match
+4: exact match but with ambiguities
+5: ambiguous completed match.
+
+SYNTAX: find_match (partial?)FILENAME
+
+Eg: \"$ find_match c,30 \" ... tries to match \"c,30*\" and if a unique match is found (either exact match or completed match), MATCH_FOUND is set to the name of the matched file.
+"
+		return 0
+	fi
+
+	MATCH_FOUND= # In case of failure, make sure variable is killed.
+	[ -z "$1" ] && return
+
+	local fflag=
+	[ "$1" = ",n" ] && shift && fflag=1 # If we don't care about no matches.
+
+	local mmsg
+	local aall=( $1*(N) ) # Pass found filenames.
+	# No matches at all:
+	if [ -z "$aall" ]; then
+		if [[ "$1" =~ '\*' || "$1" =~ '\?' ]]; then
+			errormsg "0: No wildcards please.";
+			return 0
+		else
+			[ "$fflag" = 1 ] || warningmsg "\n1: No file(s) matching: '$1' found."
+			return 1
+		fi
+	fi
+
+	if [ -e "$1" ]; then
+		MATCH_FOUND="$1"
+		[[ "$#aall" = 1 ]] &&
+		{ 	infomsg "2: Single exact match found: '$1'."
+			return 2
+		}
+		infomsg "4: Exact match found: '$1' but with ambiguities."
+		return 4
+	elif [[ "$#aall" = 1 ]]; then
+		MATCH_FOUND="$aall[1]"
+		infomsg "3: Unique completed match found: '$aall[1]'."
+		return 3
+	fi
+
+	infomsg "5: $#aall matches for '$1', please disambiguate or copy manually:"
+	print -l "${(n)aall[@]}\n" # Numeric sort, thanks zsh.
+	return 5
+} # END: ffind_match()
+
+# =============================================================================
+# Try to match an incomplete filename and then source it.  File is almost always a saved function like: " try mnt,9 ".
+
+# 'try' needs to tolerate abmiguity: 'try c c,5' -- of course 'c' is ambiguous.
+
+function try ()
+{
+	if [[ ! "$1" || "$2" ]]; then # Nasty errors if 2nd argument!
+		infomsg "
+SYNTAX: try (partial?)FILENAME
+
+Eg: \"$ try c,30\" ... Try to match \"c,30*\" and if a unique match is found (either exact match or completed match), source the file. 'try' is intended to source backups of function files or scripts, mostly for debugging.
+"
+		return 1
+	fi
+
+	find_match $1
+	[ -n "$MATCH_FOUND" ] || return 1 # ffind_match will report any error.
+	actionmsg "Sourcing $MATCH_FOUND"
+	source "$MATCH_FOUND" && return 0
+	errormsg " Something went wrong sourcing \"$MATCH_FOUND\""
+	return 1
+} #END: try()
+
+# =============================================================================
+# Wrapper around 'meld':  Used in trycompare().
+compare ()
+{
+	[ -e "$1" ] || { errormsg "File '$1' does not exist"; return 1 }
+	[ -e "$2" ] || { errormsg "File '$2' does not exist"; return 1 }
+	diff -wb $1 $2 > /dev/null
+	local rv=$?
+	[ $rv -eq 2 ] && errormsg "'diff' cannot compare the files" && return 1
+	[ $rv -eq 0 ] && infomsg "Files are identical" && return 2
+	actionmsg "Comparing '$1' with '$2' ..."
+
+	meld $1 $2 2> /dev/null; return 0
+}
+
+# =============================================================================
+alias tc='trycompare $@' # And in 'aliases' too.
+
+### 2023-01-24: Huge simplification.  Match one always saved to 'GOOD' match two to 'BAD' -- that's how I usually work anyway.  No alterations to source files!  No more 'colon' files. It now works across directories :-)
+function trycompare ()
+{
+	# NB, don't quit, continue to help screen:
+	[ ! "$2" ] && errormsg "Need two files to compare plus optional function name."
+	if [ ! "$1" ]; then
+		infomsg "
+This utility is primarily for debugging -- some good version of a file will be melded against some bad version.  It quits imediately if the two files are identical.
+
+SYNTAX: trycompare <(partial?)FILENAME1 (partial?)FILENAME2> [FUNCTIONNAME]
+
+$red  trycompare c,30 c $nrm
+ ... run 'compare' (which wraps 'meld') on the two files shown. Names autocomplete.
+
+$red  tc good,1 bad,3 ugly $nrm
+... the function 'ugly' will be sourced in both 'good,1' and 'bad,3' and each version of the stripped function written to GOOD and BAD respectively then compared.  
+
+To protect the original files, they are copied to files GOOD and BAD respectively which are then compared. Any changes made to those files will be saved by my 's' command (q.v.). (Obviously the second file might not really be 'bad', but usually we are comparing a buggy file with some file known to be good so the names are appropriate.)
+
+The normal thing will be to make repairs to BAD via comparing it to GOOD, quit 'meld', source 'BAD' and see if the bug has been fixed.  If not then do: '$ tc GOOD BAD' and continue editing.  Once the repair is made, 'BAD' is then copied back to the original filename.  Alternatively, more recent lines of code can be melded from BAD into GOOD (which is almost always older) so as to see at what point the bug appears -- slower but safer.  After it's fixed by this method it is 'GOOD' that is copied back to the original filename.
+
+GOOD and BAD will not be delteted even if no changes have been made.  But if there are changes they will be saved by my 's' command, thus a regression to a previous version is always possible -- no edits are ever lost except by manual deletion.  After all bugs are fixed, the normal thing would be to do: '$ rm GOOD* BAD*' to clean up the backups.  Remember that 'GOOD' and 'BAD' themselves are overwritten by subsquent calls to this utility -- if you need to save them do it manually.  
+
+Note that if you do: '$ tc ../FILENAME FILENAME', tho the original first file is in the parent directory, GOOD itself will be saved in the current directory so that: '$ tc GOOD BAD' will work as normal.  After repairs, GOOD must be copied back to the parent directory (in this case).
+
+If a 3d argument is given it must be the name of a function that will be found in both of the FILENAMEs.  In this case, each of the FILENAMEs will be sourced and the specified function will be 'declare -f 'ed' and written to GOOD and BAD respectively.  This makes code comparisions much easier since only one function will be compared, and they will display in their 'stripped' versions with all comments removed and all formating identical.
+
+Thus if you are bug hunting and doing a cumulative repair of a broken function by comparing it with the last good version, the thing to do is to use the '3d argument' method once -- to create the stripped-down files -- then use the two argument method: '$ tc GOOD BAD' to begin the repair.  Once the bug is found, the fix will normally be applied in the full length file -- you don't want a stripped down version of some function replacing the original commented file, do you?
+
+WARNING, there is little checking in this utility.  Existing functions in memory will probably be overwritten by the sourcing above, and the FUNCTIONNAME better be found and thus sourced in both files or incorrect versions of the function are likely to be compared.  ('declare -f' doesn't know where a function comes from, only that it exists in memory.)  If GOOD and BAD are reported as identical, FUNCTIONNAME is probably not sourced in the two files.  Be careful.  Note that if you are comparing the most recent source file against some backup, just put the most recent as the second argument and it will be the final one to be sourced, leaving you up to date.  Or visa versa if you want the older version active.
+
+It's easier to just use this utility a few times to see how it works, but here's a samle run:
+
+We'll compare the function 'func' in a backup file vs. the current buggy version:
+${red} $ tc 'Backup/func,15, tested OK' 'func,16, problems' 'func' ${nrm}
+Make some edits to BAD, trying to fix the problem in 'func'. (Files: GOOD, BAD and BAD,1 are created.)  Then source BAD to see if we've fixed the bug:
+${red} $ . BAD; func ${nrm}
+Is 'func' OK? ... no, it still has bugs.  Compare just the stripped functions:
+${red} $ tc GOOD BAD ${nrm}
+Make more edits. (File BAD,2 is created.) Source again: 
+${red} $ . BAD; func ${nrm}
+'func' is fixed! so now we need to apply the fix to the original source file:
+${red} $ tc 'Backup/func,15, tested OK' 'func,16, problems' ${nrm}
+Now test it:
+${red} $ . 'func,16, problems'; func ${nrm}
+It's fine, so save it to a new name:
+${red} $ cp 'func,16, problems' func,17, fixed' ${nrm}
+ ... and clean up:
+${red} $ rm GOOD* BAD* ${nrm}
+
+"
+		return 0
+	fi
+
+	local match1=
+	local match2=
+
+	# $1 is partial name, $match1 is matched name.
+	find_match "$1"; [ "$MATCH_FOUND" ] || return 1 # ffind_match will report status.
+	match1="$MATCH_FOUND"
+
+	find_match "$2"; [ "$MATCH_FOUND" ] || return 1 # ditto.
+	match2="$MATCH_FOUND"
+
+	# Return if files are identical. Test here, to avoid having to clean up below:
+	diff -wb "$match1" "$match2" > /dev/null
+	local rv=$?
+	[ $rv -eq 2 ] && errormsg "'diff' cannot compare the files" && return 1
+	[ $rv -eq 0 ] && infomsg "Files are identical" && return 2
+
+	# We always create GOOD and BAD, just delete by hand if needed but why bother, they just sit there and will be overwritten next time. 
+	# If we do: 'tc GOOD BAD' no overwrite (same file), BUT backups still happen OK.
+	cp "$match1" GOOD &> /dev/null
+	cp "$match2" BAD  &> /dev/null
+
+	[ $3 ] && 
+	{
+		# Source each file, 'delare' the named function and write to GOOD/BAD:
+		source "$match1"; declare -f $3 >! GOOD
+		source "$match2"; declare -f $3 >! BAD
+	}
+
+	# Even if the contents are old, we want to see GOOD and BAD at the bottom of file listings:
+	touch GOOD
+	touch BAD
+
+	# Make backups in case there are changes made: (Can't use 's' since we'd not be sure of index.)
+	cp GOOD GOOD-backup
+	cp BAD  BAD-backup
+
+	# This calls 'meld': Compare either the original files or 'declare' output:
+	# If files are identical return.
+	compare GOOD BAD; (( $? == 2 )) && return 1
+
+	# Save any changed files:  NB we don't delete GOOD/BAD because if we do: 'tc GOOD BAD' after declaring functions we need both files to exist even if one or the other of them has not changed.
+	diff -wb GOOD GOOD-backup > /dev/null; [ $? -eq 0 ] || s GOOD
+	diff -wb BAD BAD-backup   > /dev/null; [ $? -eq 0 ] || s BAD
+
+	# Don't need these after diff has been run, changes have been saved:
+	rm GOOD-backup BAD-backup
+} # End: trycompare()

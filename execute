@@ -1,0 +1,54 @@
+#!/usr/bin/zsh
+
+# 2022-11-15: Capture eval error:
+# 2022-11-15: Huge rework.  _execute_output is now always split on lines.  The ',a' switch is removed it was only used in h() and that func is now improved anyway with direct call to nn_list.
+
+typeset -g _execute_input	# Command string input to this function.
+# Write expanded input command to history.  _execute_history is global but functions have local flag 'to_history' for individual use.
+typeset -g _execute_history
+typeset -g _execute_output		# Command output.
+typeset -g _execute_linecount	# Count of lines in the output.
+
+# This function wraps 'eval' mostly.  Used universally in my functions.
+function _execute ()
+{
+	local no_newline=
+	local ssilent=
+	local aactive=
+	# 2022-11-18: In case eval barfs, make sure this has been nulled:
+	_execute_linecount=
+
+	if [[ ${1:0:1} = ',' ]]; then
+		for ((i=1; i < ${#1}; i++)); do
+		case ${1:$i:1} in
+			H ) to_history=1 ;;	# Local command to save to history.  So far this hasn't been used.
+			n ) no_newline=1 ;; # Don't print newline, as in i() : 'LISTING' line or r() where blank line buggers up 'xargs'.
+			s ) ssilent=1 ;;	# $_execute_output will be created but not printed.
+			* ) errormsg "No such switch \",${1:$i:1}\""; return 1 ;;
+		esac
+		done
+		shift
+	fi
+
+	[ "$no_newline" ] || echo
+	# Global flag or local flag.  Backslashed chars are saved litteraly by "-r".
+	[[ "$_execute_history" || "$to_history" ]] && print -rS "$@"
+
+	# Quote or everything seems to work except saving to history.
+	_execute_input="$@"
+	_execute_output=$( eval "$@" )  # Save output to a variable.
+
+	local rv=$? 
+	[[ $? > 0 && ! $_execute_linecount ]] && errormsg "eval returns an error" && return 1 
+
+	_execute_output=( ${(f)_execute_output} ) 	# Split on lines.
+	_execute_linecount=$#_execute_output		# Count lines in output.
+
+	# 2022-11-18: Null output can return errorlevel 1.  zero is legitimate linecount but 'unset' indicates an error:
+	[[ $rv > 0 && $_execute_linecount != '0' ]] && errormsg "eval returns an error" && return 1 
+
+	print -rl -- $_execute_output >! /tmp/_execute_output
+
+	[ ! "$ssilent" ] && print -rl -- $_execute_output # If NOT ',s' then print the output.  If ',s' then func will be processing _execute_output further, as in g() where it is usually columnized.
+	return 0
+}
