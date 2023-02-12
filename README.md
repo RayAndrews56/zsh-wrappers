@@ -12,6 +12,63 @@ Files 'aznt', 'nview' and 'ntools' are heavy edits of the work of Sebastian Gnia
 
 My stuff:  'messagefunctions' are colorized messages that I use throughout.  I like the idea, but it's not well developed yet and my use of color is still a bit chaotic. 'miscfunctions' are just that -- some of them are quite nice.  'aliases' -- some of these will be used by my functions so I include the whole thing. 'execute' contains a helper function used very commonly -- I create huge strings for execution sometimes and function '_execute()' detonates them and saves them to the history list as desired.
 
+The functions:
 
+The other files mostly contain just one function of the same name as the file along with it's helper functions.  (However I often do this sort of thing:
 
+alias f='noglob _f'
+function _f ()
+{ ...
 
+... that will be in the file 'f').  
+
+u(): (Unzip): This is rather boring I just call whatever unzip, untar or whatever other de-compress utility is required based on the file extension.
+
+timer(): Probably not needed, there are stock system utilities that do this work better.
+
+mnt(): (Mount): Mounts and entire disk.  This utility is very specific to my system's setup but it might be of interest.  I can do:
+
+$ mnt sdb
+
+... and the whole disk '/dev/sdb' will be mounted to proscribed places.
+
+h(): (History): Is very nice and should be of general interest.  I can't live without it.
+
+s(): (Save): There may be better ways to save backups, but this is simple and effective.
+
+try(): (Try): Very personal, these functions work with the backup system that my 's()' function creates and they restore and source backup functions.
+
+rap(): Debian specific, this function attempts to put all the functionality of apt, apt-get, dpkg, aptitude and the whole mess of Debian package management under one roof.  It more or less works but it's a hodge-podge.
+
+c(): (cd): One of my favorites, 'cd' to any recently visited directory.  But the list is persistent and global (this depends on the functions in my 'zshrc').  Lots of little features too, like:
+
+$ c ,4
+
+... 'cd' to the directory current on terminal #4.
+
+varis(): A handy, dandy, variable viewer, useful in debugging.  If there's a better way please let me know!
+
+v(): (variable): Gives a nice listing of variables (parameters) along with their attributes and values:
+
+$ v ,f pa*
+
+integer:  Pagecount = 1
+array:  Pagetop = ( 1 )
+association-readonly-hide-hideval-special:  parameters = !hidden!
+array-readonly-hide-hideval-special:  patchars = !hidden!
+scalar-tied-export-special:  PATH = .:/aWorking/Zsh/System:/aWorking/Bin:/usr/local/bin ...
+array-tied-special:  path = ( . /aWorking/Zsh/System /aWorking/Bin /usr/local/bin /usr/ ...
+
+...
+
+i(): (Information): This monstrosity attempts to show you *everything* that the shell might identify or find matching the argument entered, be it a command of any sort, a file, a variable, a named pipe or WHATEVER.  If zsh recognizes it in any way shape or form, i(), should find it.
+
+g(): (grep): A nice wrapper around grep, not too fancy except for the justified output.
+
+l(): (ls): Wraps 'ls' in a very civilized way.
+
+f(): (find): A nice wrapper around 'find'.
+
+CONCLUSION:
+
+Sorry in advance!  All feedback welcome.  To run this stuff you'd probably just source all the files (except for the '.txt' files) and everything should be available.  If there's any interest in any of this, I look forward to improvements (or replacements).  Many thanks to the superb people on <zsh-users@zsh.org> who labored patiently helping me to get as far as I have, especially Bart and Roman.  
